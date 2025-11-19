@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payroll attendance ni Shazzny</title>
+    <title>Attendance and Payslip Generator</title>
     
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -200,9 +200,11 @@
                 }));
             };
 
-            const removeStaff = (id) => {
-                if(confirm("Remove this staff member?")) {
+            const secureRemoveStaff = (id, name) => {
+                const input = prompt(`SECURITY CHECK:\n\nTo delete staff member "${name}", please type the word: DELETE`);
+                if (input === 'DELETE') {
                     setState(p => ({ ...p, staff: p.staff.filter(s => s.id !== id) }));
+                    showMessageBox("Staff member deleted.");
                 }
             };
 
@@ -269,7 +271,8 @@
                 doc.setFillColor(67, 56, 202); // Indigo
                 doc.rect(0,0,210,40,'F');
                 doc.setTextColor(255); doc.setFontSize(22);
-                doc.text("Payslip Report", 105, 20, {align:'center'});
+                // Changed Title
+                doc.text("Attendance and Payslip Generator", 105, 20, {align:'center'});
                 doc.setFontSize(12);
                 doc.text(`Period: ${formatFullDate(state.startDate)} - ${formatFullDate(state.endDate)}`, 105, 30, {align:'center'});
 
@@ -314,7 +317,8 @@
                         <div className="max-w-5xl mx-auto">
                             <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                                 <h1 className="text-xl font-bold flex items-center gap-2">
-                                    <span className="text-2xl"</span> Attendance And Payslip Generator 
+                                    {/* PH Flag Removed, Title Updated */}
+                                    Attendance and Payslip Generator
                                 </h1>
                                 <div className="flex gap-2 bg-indigo-800 p-1 rounded-lg">
                                     <input type="date" value={state.startDate} onChange={(e)=>updateGlobalDate('start', e.target.value)} className="text-black text-xs p-2 rounded" />
@@ -348,10 +352,14 @@
                                 <div key={s.id} className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
                                     {/* Staff Header */}
                                     <div className="bg-slate-50 p-4 border-b border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                                        <div className="flex gap-3 w-full md:w-auto">
+                                        <div className="flex gap-3 w-full md:w-auto items-center">
                                             <input type="text" value={s.name} onChange={(e)=>updateStaff(s.id, 'name', e.target.value)} 
                                                 className="font-bold text-lg text-slate-800 bg-transparent border-b border-dashed border-slate-300 focus:border-indigo-500 outline-none w-full md:w-48" placeholder="Staff Name" />
-                                            <button onClick={()=>removeStaff(s.id)} className="text-red-300 hover:text-red-500">✕</button>
+                                            
+                                            {/* NEW: Secure Delete Button */}
+                                            <button onClick={()=>secureRemoveStaff(s.id, s.name)} className="bg-red-100 text-red-600 hover:bg-red-200 px-3 py-1 rounded text-xs font-bold transition-colors">
+                                                Delete
+                                            </button>
                                         </div>
                                         
                                         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
@@ -410,5 +418,3 @@
     </script>
 </body>
 </html>
-
-
