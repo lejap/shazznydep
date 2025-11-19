@@ -61,7 +61,7 @@
         };
 
         const FIREBASE_ENABLED = userFirebaseConfig.projectId && userFirebaseConfig.apiKey;
-        const LOCAL_STORAGE_KEY = 'payslip_generator_v4_multi';
+        const LOCAL_STORAGE_KEY = 'payslip_generator_v5_multi_restdays';
         
         // Dates
         const today = new Date();
@@ -73,7 +73,6 @@
             startDate: today.toISOString().substr(0, 10), 
             endDate: initialEnd.toISOString().substr(0, 10),
             daysCount: 15,
-            // STAFF ARRAY: Holds all employees
             staff: [
                 { id: 1, name: "Staff 1", rate: 500, payMode: 'daily', attendance: Array(15).fill(false) }
             ]
@@ -95,6 +94,14 @@
             return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' });
         };
 
+        // Helper to check if a specific day index is Sat (6) or Sun (0)
+        const isWeekend = (startStr, offset) => {
+            const d = new Date(startStr);
+            d.setDate(d.getDate() + offset);
+            const day = d.getDay();
+            return day === 0 || day === 6;
+        };
+
         const formatFullDate = (dateStr) => new Date(dateStr).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
 
         // --- DATA SYNC ---
@@ -109,7 +116,7 @@
 
         let db, userId;
         const PAYSLIP_COLLECTION = 'payslips';
-        const PAYSLIP_DOC_ID = 'staff_data_v4_multi';
+        const PAYSLIP_DOC_ID = 'staff_data_v4_multi'; // Keeping same ID to preserve your data
 
         const writeToFirestore = (data) => {
             if (!db || !userId) return;
@@ -178,6 +185,7 @@
                 const diffDays = Math.ceil(Math.abs(end - start) / (86400000)) + 1;
                 
                 // Resize ALL staff attendance arrays
+                // When resizing, new days default to false (Absent), weekends will be handled by render logic
                 const newStaff = state.staff.map(s => ({
                     ...s,
                     attendance: Array(diffDays).fill(false).map((v, i) => i < s.attendance.length ? s.attendance[i] : false)
@@ -216,6 +224,9 @@
             };
 
             const toggleAttendance = (staffId, dayIndex) => {
+                // Prevent toggling if it is a weekend
+                if (isWeekend(state.startDate, dayIndex)) return;
+
                 setState(p => ({
                     ...p,
                     staff: p.staff.map(s => {
@@ -229,10 +240,17 @@
 
             // Bulk Actions
             const markAllStaff = (isPresent) => {
-                if(confirm(`Are you sure you want to mark ALL staff as ${isPresent ? 'PRESENT' : 'ABSENT'}?`)) {
+                if(confirm(`Are you sure you want to mark ALL staff as ${isPresent ? 'PRESENT' : 'ABSENT'} (excluding weekends)?`)) {
                     setState(p => ({
                         ...p,
-                        staff: p.staff.map(s => ({ ...s, attendance: Array(p.daysCount).fill(isPresent) }))
+                        staff: p.staff.map(s => ({ 
+                            ...s, 
+                            attendance: s.attendance.map((val, i) => {
+                                // If it's a weekend, force it to be FALSE (Rest Day/Absent)
+                                if (isWeekend(p.startDate, i)) return false;
+                                return isPresent;
+                            })
+                        }))
                     }));
                 }
             };
@@ -271,7 +289,6 @@
                 doc.setFillColor(67, 56, 202); // Indigo
                 doc.rect(0,0,210,40,'F');
                 doc.setTextColor(255); doc.setFontSize(22);
-                // Changed Title
                 doc.text("Attendance and Payslip Generator", 105, 20, {align:'center'});
                 doc.setFontSize(12);
                 doc.text(`Period: ${formatFullDate(state.startDate)} - ${formatFullDate(state.endDate)}`, 105, 30, {align:'center'});
@@ -296,10 +313,19 @@
                 s.attendance.forEach((p, i) => {
                     if (y > 270) { doc.addPage(); y = 20; }
                     doc.text(getDisplayDate(state.startDate, i), 25, y);
-                    if (p) doc.setTextColor(22, 163, 74); else doc.setTextColor(150);
-                    doc.text(p ? "Present" : "Absent", 100, y);
-                    doc.setTextColor(0);
-                    doc.text(p ? `${currency}${dailyRate.toFixed(2)}` : "-", 160, y);
+                    
+                    // Check for Rest Day in PDF
+                    if (isWeekend(state.startDate, i)) {
+                        doc.setTextColor(249, 115, 22); // Orange
+                        doc.text("Rest Day", 100, y);
+                        doc.setTextColor(150);
+                        doc.text("-", 160, y);
+                    } else {
+                        if (p) doc.setTextColor(22, 163, 74); else doc.setTextColor(150);
+                        doc.text(p ? "Present" : "Absent", 100, y);
+                        doc.setTextColor(0);
+                        doc.text(p ? `${currency}${dailyRate.toFixed(2)}` : "-", 160, y);
+                    }
                     y+=8;
                 });
 
@@ -317,7 +343,6 @@
                         <div className="max-w-5xl mx-auto">
                             <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                                 <h1 className="text-xl font-bold flex items-center gap-2">
-                                    {/* PH Flag Removed, Title Updated */}
                                     Attendance and Payslip Generator
                                 </h1>
                                 <div className="flex gap-2 bg-indigo-800 p-1 rounded-lg">
@@ -356,7 +381,6 @@
                                             <input type="text" value={s.name} onChange={(e)=>updateStaff(s.id, 'name', e.target.value)} 
                                                 className="font-bold text-lg text-slate-800 bg-transparent border-b border-dashed border-slate-300 focus:border-indigo-500 outline-none w-full md:w-48" placeholder="Staff Name" />
                                             
-                                            {/* NEW: Secure Delete Button */}
                                             <button onClick={()=>secureRemoveStaff(s.id, s.name)} className="bg-red-100 text-red-600 hover:bg-red-200 px-3 py-1 rounded text-xs font-bold transition-colors">
                                                 Delete
                                             </button>
@@ -384,14 +408,22 @@
                                     {/* Attendance Grid */}
                                     <div className="p-4">
                                         <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-15 gap-1">
-                                            {s.attendance.map((isPresent, idx) => (
-                                                <button key={idx} onClick={()=>toggleAttendance(s.id, idx)}
-                                                    className={`h-12 flex flex-col items-center justify-center rounded border text-[10px] transition-all
-                                                    ${isPresent ? 'bg-green-500 border-green-600 text-white' : 'bg-slate-100 border-slate-200 text-slate-400'}`}>
-                                                    <span className="opacity-70">{getDisplayDate(state.startDate, idx).split(',')[0]}</span>
-                                                    <span className="font-bold">{getDisplayDate(state.startDate, idx).split(' ')[1]}</span>
-                                                </button>
-                                            ))}
+                                            {s.attendance.map((isPresent, idx) => {
+                                                const isRestDay = isWeekend(state.startDate, idx);
+                                                return (
+                                                    <button key={idx} onClick={()=>toggleAttendance(s.id, idx)} disabled={isRestDay}
+                                                        className={`h-12 flex flex-col items-center justify-center rounded border text-[10px] transition-all
+                                                        ${isRestDay 
+                                                            ? 'bg-orange-50 border-orange-200 text-orange-400 cursor-not-allowed opacity-70' 
+                                                            : (isPresent ? 'bg-green-500 border-green-600 text-white' : 'bg-slate-100 border-slate-200 text-slate-400')
+                                                        }`}>
+                                                        <span className="opacity-70">{getDisplayDate(state.startDate, idx).split(',')[0]}</span>
+                                                        <span className="font-bold">
+                                                            {isRestDay ? "REST" : getDisplayDate(state.startDate, idx).split(' ')[1]}
+                                                        </span>
+                                                    </button>
+                                                )
+                                            })}
                                         </div>
                                         <div className="mt-2 text-right text-xs text-slate-400">
                                             {present} days present
