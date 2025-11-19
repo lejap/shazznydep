@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payslip Generator sa Lagum (Working)</title>
+    <title>Payslip Generator sa Lagum (Cloud Sync)</title>
     
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -17,253 +17,266 @@
     
     <!-- Load jsPDF for PDF generation -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    
+    <!-- Load Firebase Modules (Auth and Firestore) -->
+    <script type="module">
+        // Import necessary Firebase functions
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+        // Expose Firebase functions globally so the React/Babel script tag can access them
+        window.initializeApp = initializeApp;
+        window.getAuth = getAuth;
+        window.signInAnonymously = signInAnonymously;
+        window.onAuthStateChanged = onAuthStateChanged;
+        window.getFirestore = getFirestore;
+        window.doc = doc;
+        window.setDoc = setDoc;
+        window.onSnapshot = onSnapshot;
+        window.setLogLevel = setLogLevel;
+    </script>
 
     <style>
         /* Base styles */
         body { font-family: 'Inter', sans-serif; }
-        button { touch-action: manipulation; }
-        
-        /* Loading Overlay */
-        .loading-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgba(255, 255, 255, 0.95);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-            font-size: 1.2rem;
-            color: #1e40af;
-        }
+        /* Prevents strange touch delay on buttons for mobile */
+        button { touch-action: manipulation; } 
     </style>
 </head>
 <body class="bg-slate-50">
 
     <div id="root"></div>
 
-    <!-- 
-        --- SCRIPT BLOCK 1: MODULE IMPORTS AND GLOBAL SETUP --- 
-        This block loads all Firebase modules using native imports and initializes them. 
-        It makes the necessary Firebase and React functions globally available for the Babel script.
-    -->
-    <script type="module">
-        // Import Firebase functions
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const currency = '₱'; 
         
-        // Expose Firebase functions globally for the React component
-        window.F_initializeApp = initializeApp;
-        window.F_getAuth = getAuth;
-        window.F_signInAnonymously = signInAnonymously;
-        window.F_signInWithCustomToken = signInWithCustomToken;
-        window.F_onAuthStateChanged = onAuthStateChanged;
-        window.F_setPersistence = setPersistence;
-        window.F_browserSessionPersistence = browserSessionPersistence;
-        window.F_getFirestore = getFirestore;
-        window.F_doc = doc;
-        window.F_setDoc = setDoc;
-        window.F_onSnapshot = onSnapshot;
+        // =========================================================
+        // !!! CRITICAL: FIREBASE CONFIGURATION (PASTED BY USER) !!!
+        // This is used to connect to your personal Firestore database.
+        const userFirebaseConfig = {
+             apiKey: "AIzaSyBK94w1LslQlZpowcEytMWI20iUbXQYBv4",
+             authDomain: "payslip-6e83f.firebaseapp.com",
+             projectId: "payslip-6e83f",
+             storageBucket: "payslip-6e83f.firebasestorage.app",
+             messagingSenderId: "804926507342",
+             appId: "1:804926507342:web:f0c3b19786574d18ab761f",
+             measurementId: "G-TJE0RCHW4P"
+        };
+        // =========================================================
 
-        // --- GLOBAL FIREBASE/APP CONFIG ---
-        window.firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config ? JSON.parse(__firebase_config) : null;
-        window.appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        window.initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-
-        window.db = null;
-        window.auth = null;
-        window.isFirebaseAvailable = false;
+        const FIREBASE_ENABLED = userFirebaseConfig.projectId && userFirebaseConfig.apiKey;
+        const LOCAL_STORAGE_KEY = 'payslip_generator_data_cloud_fallback';
         
-        // Default initial state
-        window.DEFAULT_PAYSLIP_STATE = {
+        // --- CORE STATE ---
+        const DEFAULT_PAYSLIP_STATE = {
             staffName: "",
             payMode: 'daily',
             rateInput: 500,
-            startDate: new Date().toISOString().substr(0, 10),
-            // Attendance is saved as a JSON string to ensure clean saving in Firestore
-            attendance: JSON.stringify(Array(15).fill(true)), 
+            // Initializes to today's date formatted as YYYY-MM-DD
+            startDate: new Date().toISOString().substr(0, 10), 
+            attendance: Array(15).fill(true), // 15 days, all true (Present)
+        };
+
+        // Custom Message Box Function for notifications
+        const showMessageBox = (message, type = 'info') => {
+            const messageContainer = document.getElementById('message-box');
+            if (!messageContainer) return;
+            
+            messageContainer.textContent = message;
+            messageContainer.classList.remove('hidden', 'opacity-0');
+            messageContainer.classList.add('opacity-100');
+
+            messageContainer.className = `fixed top-4 right-4 p-3 px-4 rounded-xl shadow-2xl text-sm z-50 transition-all duration-300 transform translate-y-0 opacity-100 
+                                            ${type === 'error' ? 'bg-red-600' : 'bg-green-600'} text-white`;
+            
+            setTimeout(() => {
+                messageContainer.classList.remove('opacity-100');
+                messageContainer.classList.add('opacity-0');
+                setTimeout(() => messageContainer.classList.add('hidden'), 300);
+            }, 4000);
         };
 
 
-        // Attempt to initialize Firebase services safely
-        if (window.firebaseConfig) {
+        // --- FIRESTORE / LOCAL STORAGE FUNCTIONS ---
+        
+        // Local Storage Fallback Functions
+        const loadLocalData = () => {
             try {
-                const app = window.F_initializeApp(window.firebaseConfig);
-                window.db = window.F_getFirestore(app);
-                window.auth = window.F_getAuth(app);
-                window.isFirebaseAvailable = true;
-                console.log("Firebase services initialized successfully.");
+                const storedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+                if (storedData) {
+                    const parsedData = JSON.parse(storedData);
+                    // Handle attendance string conversion if needed
+                    if (typeof parsedData.attendance === 'string') {
+                         parsedData.attendance = JSON.parse(parsedData.attendance);
+                    }
+                    return { ...DEFAULT_PAYSLIP_STATE, ...parsedData };
+                }
             } catch (error) {
-                console.error("Firebase initialization failed. Running in Local Mode.", error);
+                console.error("Error loading local data:", error);
             }
-        } else {
-             console.warn("Firebase config not found. Running in Local Mode.");
-        }
-    </script>
+            return DEFAULT_PAYSLIP_STATE;
+        };
 
-    <!-- 
-        --- SCRIPT BLOCK 2: REACT COMPONENT WITH BABEL/JSX --- 
-        This block uses type="text/babel" so the JSX syntax can be transformed. 
-        It relies on the global variables set in the module script above.
-    -->
-    <script type="text/babel">
-        // Access global React functions
-        const { useState, useEffect, useRef } = React;
-        const { doc, setDoc, onSnapshot, getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged, setPersistence, browserSessionPersistence, getFirestore } = window; // Destructure if needed, but we'll use F_ prefixes
+        const saveLocalData = (data) => {
+            try {
+                const dataToStore = {
+                    ...data,
+                    // Store array as JSON string for Local Storage compatibility
+                    attendance: JSON.stringify(data.attendance) 
+                };
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToStore));
+            } catch (error) {
+                console.error("Error saving local data:", error);
+            }
+        };
+
+        // Firebase State and References
+        let db = null;
+        let userId = null;
+        // Using a simple collection and document ID since this is a single-user app for now
+        const PAYSLIP_COLLECTION = 'payslips'; 
+        const PAYSLIP_DOC_ID = 'staff_data'; 
+
+        // Write data to Firestore
+        const writeToFirestore = (data) => {
+            if (!db || !userId) return;
+            
+            const dataToSave = {
+                ...data,
+                // Store array as JSON string for Firestore compatibility (best practice)
+                attendance: JSON.stringify(data.attendance), 
+            };
+
+            const docRef = window.doc(db, PAYSLIP_COLLECTION, PAYSLIP_DOC_ID);
+            // Use merge: true to avoid overwriting the entire document
+            window.setDoc(docRef, dataToSave, { merge: true })
+                .then(() => showMessageBox("Data synced to the Cloud!"))
+                .catch(error => console.error("Firestore Write Error:", error));
+        };
 
         // --- REACT COMPONENT ---
-
         function App() {
-            // Firebase State
-            const isCloudEnabled = window.isFirebaseAvailable;
-            const [userId, setUserId] = useState(isCloudEnabled ? null : 'local-user');
-            const [isLoading, setIsLoading] = useState(isCloudEnabled); // Only show loading if Firebase is expected to connect
+            const [payslipData, setPayslipData] = useState(DEFAULT_PAYSLIP_STATE);
             const [isSaving, setIsSaving] = useState(false);
-            const [isCloudMode, setIsCloudMode] = useState(isCloudEnabled);
-
-            // Payslip Data State
-            // Use JSON.parse(attendance) for initial load if necessary
-            const initialData = {
-                ...window.DEFAULT_PAYSLIP_STATE,
-                attendance: JSON.parse(window.DEFAULT_PAYSLIP_STATE.attendance) 
-            };
-            const [payslipData, setPayslipData] = useState(initialData);
-            const currency = '₱'; 
+            const [isCloudMode, setIsCloudMode] = useState(false);
+            const [isDataReady, setIsDataReady] = useState(false);
             
-            // Ref to prevent initial save trigger before data is loaded/initialized
             const isInitialLoad = useRef(true); 
-            const db = window.db;
-            const auth = window.auth;
 
-            // --- FIREBASE INITIALIZATION & AUTH (Only if available) ---
+            // 1. Firebase Initialization and Auth
             useEffect(() => {
-                if (!isCloudMode || !auth) {
-                    setIsLoading(false); // If not cloud mode, we are done loading.
-                    return;
-                }
-
-                const authenticate = async () => {
-                    await window.F_setPersistence(auth, window.F_browserSessionPersistence);
+                if (FIREBASE_ENABLED && window.getFirestore) {
                     try {
-                        if (window.initialAuthToken) {
-                            await window.F_signInWithCustomToken(auth, window.initialAuthToken);
-                        } else {
-                            await window.F_signInAnonymously(auth);
-                        }
-                        console.log("Authentication successful.");
-                    } catch (error) {
-                        console.error("Authentication failed:", error);
-                        // Fallback sign-in attempt
-                        try {
-                             await window.F_signInAnonymously(auth);
-                        } catch (anonError) {
-                            console.error("Anonymous sign-in failed:", anonError);
-                        }
-                    }
-                };
-
-                authenticate();
-                
-                // Auth State Listener: sets the userId once sign-in is complete
-                const unsubscribeAuth = window.F_onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        setUserId(user.uid);
-                    } else {
-                        setUserId(null); 
-                        setIsLoading(false);
-                        console.warn("User not authenticated.");
-                    }
-                });
-
-                return () => unsubscribeAuth();
-            }, [isCloudMode]); // Run only once on mount if in cloud mode
-
-            // --- FIRESTORE DATA LISTENER (Only if in cloud mode) ---
-            useEffect(() => {
-                if (!isCloudMode || !userId || !db) return;
-
-                const docPath = `artifacts/${window.appId}/users/${userId}/payslipData/currentSheet`;
-                const payslipDocRef = window.F_doc(db, docPath);
-
-                setIsLoading(true);
-
-                const unsubscribeSnapshot = window.F_onSnapshot(payslipDocRef, (docSnapshot) => {
-                    if (docSnapshot.exists()) {
-                        const data = docSnapshot.data();
+                        // setLogLevel('Debug'); // Uncomment for debugging Firestore traffic
+                        const app = window.initializeApp(userFirebaseConfig);
+                        const auth = window.getAuth(app);
+                        db = window.getFirestore(app);
                         
-                        let loadedAttendance = data.attendance;
-                        if (typeof loadedAttendance === 'string') {
+                        // Listen for auth state changes
+                        window.onAuthStateChanged(auth, (user) => {
+                            if (user) {
+                                userId = user.uid; // Store the unique anonymous ID
+                                setIsCloudMode(true);
+                                console.log("Cloud Mode: Signed in anonymously. UID:", userId);
+                            } else {
+                                // Attempt anonymous sign-in if not signed in
+                                window.signInAnonymously(auth).catch(e => {
+                                    console.error("Anonymous Sign-in failed:", e);
+                                    setIsCloudMode(false); 
+                                    setIsDataReady(true);
+                                    setPayslipData(loadLocalData());
+                                });
+                            }
+                        });
+                    } catch (e) {
+                        console.error("Firebase Init Error:", e);
+                        setIsCloudMode(false);
+                        setIsDataReady(true);
+                        setPayslipData(loadLocalData());
+                    }
+                } else {
+                    // Fallback to Local Storage immediately if config is missing
+                    setPayslipData(loadLocalData());
+                    setIsDataReady(true);
+                    showMessageBox("Firebase Config Missing. Running in Local Mode.", 'error');
+                }
+            }, []); 
+
+            // 2. Firestore Listener (Cloud Mode)
+            useEffect(() => {
+                // Only run this effect if we are in Cloud Mode and Firebase resources are ready
+                if (!isCloudMode || !db || !userId) return;
+
+                const docRef = window.doc(db, PAYSLIP_COLLECTION, PAYSLIP_DOC_ID);
+                
+                // Set up the real-time listener
+                const unsubscribe = window.onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        let data = docSnap.data();
+                        
+                        // Parse attendance back into an array from the stored JSON string
+                        if (data.attendance && typeof data.attendance === 'string') {
                             try {
-                                loadedAttendance = JSON.parse(loadedAttendance);
+                                data.attendance = JSON.parse(data.attendance);
                             } catch (e) {
-                                console.error("Failed to parse attendance string:", e);
-                                loadedAttendance = [];
+                                console.error("Error parsing attendance:", e);
+                                data.attendance = DEFAULT_PAYSLIP_STATE.attendance;
                             }
                         }
-                        setPayslipData({ ...window.DEFAULT_PAYSLIP_STATE, ...data, attendance: loadedAttendance });
-                        console.log("Data loaded from cloud.");
-                    } else {
-                        // If document doesn't exist, create it with default values
-                        saveData(initialData); 
-                        console.log("New document created in cloud.");
+                        
+                        // Merge loaded data with defaults
+                        setPayslipData(prev => ({ ...DEFAULT_PAYSLIP_STATE, ...data }));
+                        
+                        if (!isDataReady) {
+                             // Only show ready message after initial fetch
+                            showMessageBox("Cloud data loaded!");
+                            setIsDataReady(true);
+                        }
+                    } else if (!isDataReady) {
+                        // Document doesn't exist, use default state for the first time
+                        setPayslipData(DEFAULT_PAYSLIP_STATE);
+                        setIsDataReady(true);
+                        console.log("No existing cloud data. Using default state.");
                     }
-                    setIsLoading(false);
-                    isInitialLoad.current = false;
-                }, (error) => {
-                    console.error("Error reading Firestore document, switching to Local Mode:", error);
-                    setIsLoading(false);
-                    setIsCloudMode(false); // Fallback if listener fails
-                    showMessageBox("Error reading data. Switched to Local Mode.", 'error');
+                }, error => {
+                    // Handle disconnection/permission errors
+                    console.error("Firestore Listener Error:", error);
+                    showMessageBox("Cloud connection error. Check rules. Switching to Local Mode.", 'error');
+                    setIsCloudMode(false);
+                    setIsDataReady(true);
+                    setPayslipData(loadLocalData()); // Load local data as fallback
                 });
 
-                return () => unsubscribeSnapshot();
-            }, [userId, isCloudMode]);
+                return () => unsubscribe(); // Cleanup the listener when component unmounts
+            }, [isCloudMode, isDataReady]); // Dependencies trigger the listener setup
 
-            // --- FIRESTORE DATA SAVER (Only if in cloud mode) ---
-            const saveData = async (dataToSave = payslipData) => {
-                if (!isCloudMode || !userId || !db) {
-                    // In local mode, we don't save to cloud
+            // 3. Debounced Saving Effect (Cloud or Local)
+            useEffect(() => {
+                if (!isDataReady) return; // Wait until data is loaded/initialized
+
+                // Skip the initial render to prevent overwriting cloud data immediately
+                if (isInitialLoad.current) {
+                    isInitialLoad.current = false;
                     return;
                 }
-                
+
                 setIsSaving(true);
-                const docPath = `artifacts/${window.appId}/users/${userId}/payslipData/currentSheet`;
-                const payslipDocRef = window.F_doc(db, docPath);
-
-                let currentAttendance = Array.isArray(dataToSave.attendance) ? dataToSave.attendance : JSON.parse(dataToSave.attendance || '[]');
-                
-                const dataToStore = {
-                    ...dataToSave,
-                    attendance: JSON.stringify(currentAttendance) // Store array as JSON string
-                };
-
-                try {
-                    await window.F_setDoc(payslipDocRef, dataToStore, { merge: true });
-                    showMessageBox("Data synchronized to the cloud!");
-                } catch (error) {
-                    console.error("Error writing document, switching to Local Mode:", error);
-                    showMessageBox("Error saving data. Switched to Local Mode.", 'error');
-                    setIsCloudMode(false); // Permanent switch to local mode on write failure
-                } finally {
-                    setIsSaving(false);
-                }
-            };
-
-            // Debounced effect for saving data (triggers only after user stops typing/clicking)
-            useEffect(() => {
-                if (isInitialLoad.current && isCloudMode) return; // Skip save on initial load if we're waiting for cloud data
-
+                // Debounce the saving to avoid excessive writes/storage calls
                 const timeoutId = setTimeout(() => {
-                    if (!isLoading) { 
-                         saveData();
+                    if (isCloudMode) {
+                        writeToFirestore(payslipData);
+                    } else {
+                        saveLocalData(payslipData);
+                        showMessageBox("Data saved locally!");
                     }
-                }, 500); // Debounce by 500ms 
+                    setIsSaving(false);
+                }, 500); 
 
-                return () => clearTimeout(timeoutId);
-            }, [payslipData]); // Dependencies for saving
+                return () => clearTimeout(timeoutId); // Cleanup timeout
+            }, [payslipData, isCloudMode, isDataReady]); // Trigger save when data changes
 
             // Helper to update state and trigger save
             const updatePayslipData = (key, value) => {
@@ -274,14 +287,10 @@
             };
 
             // --- CALCULATIONS & HANDLERS ---
-            const { payMode, rateInput, startDate } = payslipData;
-            
-            // Ensure attendance is always an array for calculations
-            const attendance = Array.isArray(payslipData.attendance) ? payslipData.attendance : [];
+            const { payMode, rateInput, startDate, attendance } = payslipData;
             
             const totalDays = 15;
             const daysPresent = attendance.filter(Boolean).length;
-            const daysAbsent = totalDays - daysPresent;
 
             const getCalculatedValues = () => {
                 let dailyRate = 0;
@@ -304,7 +313,8 @@
             const getDisplayDate = (dayIndex) => {
                 const date = new Date(startDate);
                 date.setDate(date.getDate() + dayIndex);
-                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', weekday: 'short' });
+                // Use PH locale style
+                return date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' }); 
             };
 
             const toggleDay = (index) => {
@@ -314,32 +324,23 @@
             };
 
             const resetAttendance = () => {
-                const isConfirmed = window.prompt("Type 'RESET' to confirm resetting all days to Present (This cannot be undone):");
-                if (isConfirmed && isConfirmed.toUpperCase() === 'RESET') {
+                // Using a simple confirm since custom modal would add complexity
+                const userConfirmed = window.confirm("Are you sure you want to reset all days to Present? This cannot be undone.");
+                if (userConfirmed) {
                     updatePayslipData('attendance', Array(15).fill(true));
                 }
             };
-
-            // Custom Message Box Function
-            const showMessageBox = (message, type = 'info') => {
-                const messageContainer = document.getElementById('message-box');
-                if (!messageContainer) return;
-                
-                messageContainer.textContent = message;
-                messageContainer.classList.remove('hidden', 'opacity-0');
-                messageContainer.classList.add('opacity-100');
-
-                // Clear previous classes and set new ones
-                messageContainer.className = `fixed top-4 right-4 p-3 px-4 rounded-xl shadow-2xl text-sm z-50 transition-all duration-300 transform translate-y-0 opacity-100 
-                                              ${type === 'error' ? 'bg-red-600' : 'bg-green-600'} text-white`;
-                
-                setTimeout(() => {
-                    messageContainer.classList.remove('opacity-100');
-                    messageContainer.classList.add('opacity-0');
-                    setTimeout(() => messageContainer.classList.add('hidden'), 300);
-                }, 4000);
-            };
-
+            
+            if (!isDataReady) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center">
+                        <div className="text-xl text-slate-500 flex items-center gap-3">
+                            <svg className="animate-spin h-5 w-5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                            Connecting to Firebase Cloud...
+                        </div>
+                    </div>
+                );
+            }
 
             // --- PDF GENERATION LOGIC ---
             const generatePDF = () => {
@@ -357,7 +358,7 @@
 
                 const { jsPDF } = window.jspdf;
                 const doc = new jsPDF();
-                const primaryColor = [34, 139, 34]; 
+                const primaryColor = [49, 46, 129]; // Indigo-700 equivalent 
 
                 // Header
                 doc.setFillColor(...primaryColor);
@@ -384,7 +385,7 @@
                 doc.setFontSize(10);
                 doc.text("Total Payable Amount (PHP):", 125, 65);
                 doc.setFontSize(18);
-                doc.setTextColor(34, 139, 34);
+                doc.setTextColor(22, 163, 74); // Green 600
                 doc.text(`${currency} ${totalPayable.toFixed(2)}`, 125, 75);
                 doc.setFontSize(10);
                 doc.setTextColor(100, 100, 100);
@@ -422,9 +423,9 @@
                     doc.text(dateStr, 25, yPos);
                     
                     if (isPresent) {
-                        doc.setTextColor(0, 128, 0); 
+                        doc.setTextColor(22, 163, 74); // Green 600
                     } else {
-                        doc.setTextColor(200, 0, 0); 
+                        doc.setTextColor(156, 163, 175); // Slate 400 
                     }
                     doc.text(status, 100, yPos);
                     
@@ -437,25 +438,12 @@
                 // Footer
                 doc.setFontSize(8);
                 doc.setTextColor(150, 150, 150);
-                const modeText = isCloudMode ? "Cloud Sync Enabled" : "Running in Local Mode";
-                doc.text(`Generated by Payslip Generator sa Lagum (${modeText})`, 105, 290, { align: "center" });
+                doc.text(`Generated by Payslip Generator sa Lagum (${isCloudMode ? 'Cloud Mode' : 'Local Mode'})`, 105, 290, { align: "center" });
 
                 // Save
-                const safeName = payslipData.staffName.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+                const safeName = payslipData.staffName.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'untitled_staff';
                 doc.save(`${safeName}_payslip.pdf`);
             };
-
-            if (isLoading && isCloudMode) {
-                return (
-                    <div className="loading-overlay">
-                        <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-blue-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        Connecting to Cloud Database...
-                    </div>
-                );
-            }
 
             return (
                 <div className="min-h-screen p-4 md:p-8 font-sans text-gray-800 flex justify-center">
@@ -466,8 +454,8 @@
                     </div>
                     {/* Saving Indicator */}
                     {isSaving && (
-                        <div className="fixed bottom-4 right-4 bg-yellow-500 text-white p-2 px-4 rounded-full shadow-lg text-xs z-50">
-                            Saving...
+                        <div className={`fixed bottom-4 right-4 ${isCloudMode ? 'bg-indigo-500' : 'bg-yellow-500'} text-white p-2 px-4 rounded-full shadow-lg text-xs z-50`}>
+                            {isCloudMode ? 'Syncing to Cloud...' : 'Saving locally...'}
                         </div>
                     )}
 
@@ -475,21 +463,18 @@
                     <div className="w-full max-w-4xl bg-white rounded-2xl shadow-xl overflow-hidden">
                         
                         {/* Top Header */}
-                        <div className="bg-slate-800 p-6 text-white flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div className="bg-indigo-700 p-6 text-white flex flex-col md:flex-row justify-between items-center gap-4">
                             <div>
                                 <h1 className="text-2xl font-bold flex items-center gap-2">
                                     <span className="text-3xl">🇵🇭</span> Payslip Generator sa Lagum
                                 </h1>
-                                <p className="text-slate-400 text-sm">
-                                    {isCloudMode ? "Cloud Sync Enabled" : "Running in Local Mode (No cloud save)"} 
-                                    {isCloudMode && (
-                                        <span className="ml-2 font-mono text-xs">(User ID: {userId || 'N/A'})</span>
-                                    )}
+                                <p className={`text-sm font-bold ${isCloudMode ? 'text-green-300' : 'text-yellow-300'}`}>
+                                    {isCloudMode ? 'Cloud Mode (Data syncs across all devices)' : 'Local Mode (Data saves per device)'}
                                 </p>
                             </div>
-                            <div className="text-center bg-slate-700 px-6 py-3 rounded-xl border border-slate-600">
-                                <p className="text-xs text-slate-300 uppercase tracking-wide">Current Payout</p>
-                                <p className="text-3xl font-bold text-green-400">{currency} {totalPayable.toFixed(2)}</p>
+                            <div className="text-center bg-indigo-600 px-6 py-3 rounded-xl border border-indigo-500">
+                                <p className="text-xs text-indigo-200 uppercase tracking-wide">Current Payout</p>
+                                <p className="text-3xl font-bold text-green-300">{currency} {totalPayable.toFixed(2)}</p>
                             </div>
                         </div>
 
@@ -506,7 +491,7 @@
                                         value={payslipData.staffName}
                                         onChange={(e) => updatePayslipData('staffName', e.target.value)}
                                         placeholder="e.g. Juan Dela Cruz"
-                                        className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none bg-slate-50"
+                                        className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50"
                                     />
                                 </div>
 
@@ -515,8 +500,8 @@
                                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Pay Settings</label>
                                     <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-4">
                                         <div className="grid grid-cols-2 gap-2">
-                                            <button onClick={() => updatePayslipData('payMode', 'daily')} className={`py-2 text-sm font-medium rounded-lg transition-all ${payMode === 'daily' ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-600'}`}>Daily Rate</button>
-                                            <button onClick={() => updatePayslipData('payMode', 'fixed')} className={`py-2 text-sm font-medium rounded-lg transition-all ${payMode === 'fixed' ? 'bg-blue-600 text-white shadow-md' : 'bg-slate-100 text-slate-600'}`}>Fixed Total</button>
+                                            <button onClick={() => updatePayslipData('payMode', 'daily')} className={`py-2 text-sm font-medium rounded-lg transition-all ${payMode === 'daily' ? 'bg-indigo-500 text-indigo-50 shadow-md' : 'bg-slate-200 text-slate-600'}`}>Daily Rate</button>
+                                            <button onClick={() => updatePayslipData('payMode', 'fixed')} className={`py-2 text-sm font-medium rounded-lg transition-all ${payMode === 'fixed' ? 'bg-indigo-500 text-indigo-50 shadow-md' : 'bg-slate-200 text-slate-600'}`}>Fixed Total</button>
                                         </div>
                                         
                                         <div className="relative">
@@ -525,7 +510,7 @@
                                                 type="number" 
                                                 value={payslipData.rateInput}
                                                 onChange={(e) => updatePayslipData('rateInput', parseFloat(e.target.value) || 0)}
-                                                className="w-full pl-8 p-2 border rounded-lg outline-none focus:border-blue-500"
+                                                className="w-full pl-8 p-2 border rounded-lg outline-none focus:border-indigo-500"
                                             />
                                             <span className="absolute right-3 top-3 text-xs text-slate-400">
                                                 {payMode === 'daily' ? '/ day' : '/ 15 days'}
@@ -606,7 +591,6 @@
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
-
     </script>
 </body>
 </html>
