@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payslip Generator sa Lagum (Default Absent)</title>
+    <title>Payslip Generator sa Lagum (Secure Reset)</title>
     
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -76,8 +76,7 @@
             startDate: today.toISOString().substr(0, 10), 
             endDate: initialEnd.toISOString().substr(0, 10),
             daysCount: 15, 
-            // CHANGED: Default to all false (Absent)
-            attendance: Array(15).fill(false),
+            attendance: Array(15).fill(false), // Default Absent
             history: [] 
         };
 
@@ -106,7 +105,6 @@
                     if (typeof parsed.attendance === 'string') parsed.attendance = JSON.parse(parsed.attendance);
                     if (typeof parsed.history === 'string') parsed.history = JSON.parse(parsed.history);
                     
-                    // Migration logic for old data
                     if (!parsed.endDate && parsed.startDate) {
                         const e = new Date(parsed.startDate);
                         e.setDate(e.getDate() + (parsed.daysCount || 15) - 1);
@@ -133,7 +131,7 @@
         let db = null;
         let userId = null;
         const PAYSLIP_COLLECTION = 'payslips'; 
-        const PAYSLIP_DOC_ID = 'staff_data_v3'; // Changed ID to separate from previous version
+        const PAYSLIP_DOC_ID = 'staff_data_v3'; 
 
         const writeToFirestore = (data) => {
             if (!db || !userId) return;
@@ -244,7 +242,6 @@
                 const diffTime = Math.abs(end - start);
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
                 
-                // CHANGED: Default new days to FALSE (Absent)
                 const newAtt = Array(diffDays).fill(false).map((v, i) => 
                     i < state.attendance.length ? state.attendance[i] : false
                 );
@@ -264,9 +261,21 @@
                 updateState('attendance', newAtt);
             };
 
-            // NEW: Bulk update helper
-            const setAllAttendance = (status) => {
-                 updateState('attendance', Array(state.daysCount).fill(status));
+            // Helper to set all to present (True) without confirmation (Safe action)
+            const setAllPresent = () => {
+                 updateState('attendance', Array(state.daysCount).fill(true));
+            };
+
+            // NEW: SECURE RESET FUNCTION
+            const secureReset = () => {
+                const input = window.prompt("SECURITY CHECK:\n\nTo confirm clearing all entries to 'Absent', please type the word: RESET");
+                
+                if (input && input.toUpperCase() === 'RESET') {
+                    updateState('attendance', Array(state.daysCount).fill(false));
+                    showMessageBox("Attendance Reset Successful!");
+                } else {
+                     if (input !== null) showMessageBox("Reset cancelled. Incorrect word.", "error");
+                }
             };
 
             const daysPresent = state.attendance.filter(Boolean).length;
@@ -318,7 +327,6 @@
                     attendance: [...state.attendance] 
                 };
 
-                // CHANGED: Reset attendance to FALSE (Absent) for new period
                 setState(prev => ({
                     ...prev,
                     history: [record, ...(prev.history || [])],
@@ -473,12 +481,12 @@
                                         <div className="text-xs text-slate-400">{state.daysCount} Days Period</div>
                                     </div>
                                     
-                                    {/* NEW: Quick Toggle Buttons */}
+                                    {/* Quick Toggle Buttons */}
                                     <div className="flex gap-2">
-                                        <button onClick={() => setAllAttendance(true)} className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-200 transition">
+                                        <button onClick={setAllPresent} className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-200 transition">
                                             Mark All Present
                                         </button>
-                                        <button onClick={() => setAllAttendance(false)} className="text-[10px] font-bold bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-200 transition">
+                                        <button onClick={secureReset} className="text-[10px] font-bold bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-200 transition">
                                             Reset
                                         </button>
                                     </div>
@@ -521,6 +529,12 @@
                                         </div>
                                     </div>
                                 )}
+                                
+                                <div className="mt-6 text-center">
+                                    <button onClick={secureReset} className="text-xs text-slate-400 hover:text-red-500 underline">
+                                        Clear all entries
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
