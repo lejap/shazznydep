@@ -285,7 +285,7 @@
                 const { present, total } = calculatePay(s);
                 const dailyRate = s.payMode === 'daily' ? s.rate : (s.rate / state.daysCount);
 
-                doc.setFillColor(67, 56, 202); 
+                doc.setFillColor(30, 41, 59); // Slate 800 (Dark Theme)
                 doc.rect(0,0,210,40,'F');
                 doc.setTextColor(255); doc.setFontSize(22);
                 doc.text("Attendance and Payslip Generator", 105, 20, {align:'center'});
@@ -333,37 +333,38 @@
                 doc.save(`${s.name}_payslip.pdf`);
             };
 
-            if (!isDataReady) return <div className="flex h-screen items-center justify-center text-indigo-600 font-bold">Loading Multi-Staff System...</div>;
+            if (!isDataReady) return <div className="flex h-screen items-center justify-center text-slate-600 font-bold">Loading Multi-Staff System...</div>;
 
             return (
                 <div className="min-h-screen pb-20">
                     <div id="message-box" className="hidden"></div>
                     
-                    {/* TOP BAR */}
-                    <div className="bg-indigo-700 text-white p-4 sticky top-0 z-20 shadow-lg">
+                    {/* TOP BAR - THEME COLOR UPDATED TO SLATE-800 */}
+                    <div className="bg-slate-800 text-white p-4 sticky top-0 z-20 shadow-lg">
                         <div className="max-w-5xl mx-auto">
                             <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
                                 <h1 className="text-xl font-bold flex items-center gap-2">
                                     Attendance and Payslip Generator
                                 </h1>
-                                <div className="flex gap-2 bg-indigo-800 p-1 rounded-lg">
+                                {/* Darker Slate Input Container */}
+                                <div className="flex gap-2 bg-slate-900 p-1 rounded-lg">
                                     <input type="date" value={state.startDate} onChange={(e)=>updateGlobalDate('start', e.target.value)} className="text-black text-xs p-2 rounded" />
                                     <span className="flex items-center text-xs">to</span>
                                     <input type="date" value={state.endDate} onChange={(e)=>updateGlobalDate('end', e.target.value)} className="text-black text-xs p-2 rounded" />
-                                    <div className="flex items-center px-3 text-xs font-bold bg-indigo-600 rounded">
+                                    <div className="flex items-center px-3 text-xs font-bold bg-slate-600 rounded">
                                         {state.daysCount} Days
                                     </div>
                                 </div>
                             </div>
 
-                            {/* BULK TOOLS */}
+                            {/* BULK TOOLS - BUTTON COLORS UPDATED */}
                             <div className="flex gap-2 overflow-x-auto pb-1">
                                 <button onClick={addStaff} className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded text-xs font-bold flex items-center gap-1 whitespace-nowrap">
                                     + Add Staff
                                 </button>
-                                <div className="h-8 w-px bg-indigo-500 mx-2"></div>
-                                <button onClick={()=>markAllStaff(true)} className="bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-2 rounded text-xs whitespace-nowrap">Mark ALL Present</button>
-                                <button onClick={()=>markAllStaff(false)} className="bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-2 rounded text-xs whitespace-nowrap">Mark ALL Absent</button>
+                                <div className="h-8 w-px bg-slate-600 mx-2"></div>
+                                <button onClick={()=>markAllStaff(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-xs whitespace-nowrap">Mark ALL Present</button>
+                                <button onClick={()=>markAllStaff(false)} className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded text-xs whitespace-nowrap">Mark ALL Absent</button>
                                 <button onClick={secureReset} className="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded text-xs ml-auto whitespace-nowrap">Reset ALL Data</button>
                             </div>
                         </div>
@@ -380,7 +381,7 @@
                                     <div className="bg-slate-50 p-4 border-b border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                                         <div className="flex gap-3 w-full md:w-auto items-center">
                                             <input type="text" value={s.name} onChange={(e)=>updateStaff(s.id, 'name', e.target.value)} 
-                                                className="font-bold text-lg text-slate-800 bg-transparent border-b border-dashed border-slate-300 focus:border-indigo-500 outline-none w-full md:w-48" placeholder="Staff Name" />
+                                                className="font-bold text-lg text-slate-800 bg-transparent border-b border-dashed border-slate-300 focus:border-blue-500 outline-none w-full md:w-48" placeholder="Staff Name" />
                                             
                                             <button onClick={()=>secureRemoveStaff(s.id, s.name)} className="bg-red-100 text-red-600 hover:bg-red-200 px-3 py-1 rounded text-xs font-bold transition-colors">
                                                 Delete
@@ -389,13 +390,14 @@
                                         
                                         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
                                             <div className="flex bg-white border rounded overflow-hidden">
-                                                <button onClick={()=>updateStaff(s.id, 'payMode', 'daily')} className={`px-3 py-1 text-[10px] font-bold ${s.payMode==='daily'?'bg-indigo-500 text-white':'bg-slate-100'}`}>Daily</button>
-                                                <button onClick={()=>updateStaff(s.id, 'payMode', 'fixed')} className={`px-3 py-1 text-[10px] font-bold ${s.payMode==='fixed'?'bg-indigo-500 text-white':'bg-slate-100'}`}>Fixed</button>
+                                                {/* Button Active States updated to BLUE */}
+                                                <button onClick={()=>updateStaff(s.id, 'payMode', 'daily')} className={`px-3 py-1 text-[10px] font-bold ${s.payMode==='daily'?'bg-blue-600 text-white':'bg-slate-100'}`}>Daily</button>
+                                                <button onClick={()=>updateStaff(s.id, 'payMode', 'fixed')} className={`px-3 py-1 text-[10px] font-bold ${s.payMode==='fixed'?'bg-blue-600 text-white':'bg-slate-100'}`}>Fixed</button>
                                             </div>
                                             <div className="relative w-24">
                                                 <span className="absolute left-2 top-1.5 text-slate-400 text-xs">₱</span>
                                                 <input type="number" value={s.rate} onChange={(e)=>updateStaff(s.id, 'rate', e.target.value)} 
-                                                    className="w-full pl-5 p-1 border rounded text-sm" />
+                                                    className="w-full pl-5 p-1 border rounded text-sm focus:border-blue-500 outline-none" />
                                             </div>
                                             <div className="bg-green-100 text-green-800 px-3 py-1 rounded text-sm font-bold">
                                                 Total: {currency}{total.toFixed(0)}
@@ -415,14 +417,15 @@
 
                                                 return (
                                                     <button key={idx} onClick={()=>toggleAttendance(s.id, idx)} disabled={isRestDay}
-                                                        className={`h-12 flex flex-col items-center justify-center rounded border transition-all
+                                                        // Increased height from h-12 to h-16 and adjusted text size
+                                                        className={`h-16 flex flex-col items-center justify-center rounded border transition-all p-1
                                                         ${isRestDay 
                                                             ? 'bg-orange-50 border-orange-200 text-orange-400 cursor-not-allowed opacity-70' 
                                                             : (isPresent ? 'bg-green-500 border-green-600 text-white' : 'bg-slate-100 border-slate-200 text-slate-400')
                                                         }`}>
-                                                        {/* Updated Date Display */}
-                                                        <span className="opacity-70 text-[9px] uppercase">{dayName}</span>
-                                                        <span className="font-bold text-xs">
+                                                        {/* Adjusted font sizes for clarity */}
+                                                        <span className="opacity-70 text-[10px] uppercase">{dayName}</span>
+                                                        <span className="font-bold text-sm">
                                                             {isRestDay ? "REST" : monthDay}
                                                         </span>
                                                     </button>
@@ -444,7 +447,8 @@
                         )}
                     </div>
 
-                    {isSaving && <div className="fixed bottom-4 right-4 bg-indigo-600 text-white px-4 py-2 rounded-full text-xs shadow-lg animate-pulse">Saving...</div>}
+                    {/* Saving Indicator updated to Blue */}
+                    {isSaving && <div className="fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-full text-xs shadow-lg animate-pulse">Saving...</div>}
                 </div>
             );
         }
