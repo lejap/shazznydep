@@ -3,22 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payslip Generator sa Lagum (Secure Reset)</title>
+    <title>Multi-Staff Payslip Generator</title>
     
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
-    <!-- Load React and ReactDOM (Global Access) -->
+    <!-- Load React and ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     
-    <!-- Load Babel for JSX transformation -->
+    <!-- Load Babel -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Load jsPDF for PDF generation -->
+    <!-- Load jsPDF -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     
-    <!-- Load Firebase Modules (Auth and Firestore) -->
+    <!-- Load Firebase -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -39,7 +39,7 @@
         button { touch-action: manipulation; }
     </style>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-100">
 
     <div id="root"></div>
 
@@ -48,7 +48,7 @@
         const currency = '₱'; 
         
         // =========================================================
-        // YOUR FIREBASE CONFIGURATION
+        // FIREBASE CONFIGURATION
         // =========================================================
         const userFirebaseConfig = {
              apiKey: "AIzaSyBK94w1LslQlZpowcEytMWI20iUbXQYBv4",
@@ -61,98 +61,71 @@
         };
 
         const FIREBASE_ENABLED = userFirebaseConfig.projectId && userFirebaseConfig.apiKey;
-        const LOCAL_STORAGE_KEY = 'payslip_generator_v3_absent_default';
+        const LOCAL_STORAGE_KEY = 'payslip_generator_v4_multi';
         
-        // Calculate initial dates
+        // Dates
         const today = new Date();
         const initialEnd = new Date(today);
         initialEnd.setDate(today.getDate() + 14); 
 
         // --- CORE STATE ---
-        const DEFAULT_PAYSLIP_STATE = {
-            staffName: "",
-            payMode: 'daily',
-            rateInput: 500,
+        const DEFAULT_STATE = {
             startDate: today.toISOString().substr(0, 10), 
             endDate: initialEnd.toISOString().substr(0, 10),
-            daysCount: 15, 
-            attendance: Array(15).fill(false), // Default Absent
-            history: [] 
+            daysCount: 15,
+            // STAFF ARRAY: Holds all employees
+            staff: [
+                { id: 1, name: "Staff 1", rate: 500, payMode: 'daily', attendance: Array(15).fill(false) }
+            ]
         };
 
+        // --- HELPERS ---
         const showMessageBox = (message, type = 'info') => {
-            const messageContainer = document.getElementById('message-box');
-            if (!messageContainer) return;
-            
-            messageContainer.textContent = message;
-            messageContainer.classList.remove('hidden', 'opacity-0');
-            messageContainer.classList.add('opacity-100');
-            messageContainer.className = `fixed top-4 right-4 p-3 px-4 rounded-xl shadow-2xl text-sm z-50 transition-all duration-300 transform translate-y-0 opacity-100 
-                                            ${type === 'error' ? 'bg-red-600' : 'bg-green-600'} text-white`;
-            setTimeout(() => {
-                messageContainer.classList.remove('opacity-100');
-                messageContainer.classList.add('opacity-0');
-                setTimeout(() => messageContainer.classList.add('hidden'), 300);
-            }, 4000);
+            const box = document.getElementById('message-box');
+            if (!box) return;
+            box.textContent = message;
+            box.className = `fixed top-4 right-4 p-3 px-4 rounded-xl shadow-2xl text-sm z-50 transition-all duration-300 ${type === 'error' ? 'bg-red-600' : 'bg-green-600'} text-white`;
+            box.classList.remove('hidden');
+            setTimeout(() => box.classList.add('hidden'), 4000);
         };
 
-        // --- DATA HANDLING ---
+        const getDisplayDate = (startStr, offset) => {
+            const d = new Date(startStr);
+            d.setDate(d.getDate() + offset);
+            return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' });
+        };
+
+        const formatFullDate = (dateStr) => new Date(dateStr).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
+
+        // --- DATA SYNC ---
         const loadLocalData = () => {
             try {
-                const storedData = localStorage.getItem(LOCAL_STORAGE_KEY);
-                if (storedData) {
-                    const parsed = JSON.parse(storedData);
-                    if (typeof parsed.attendance === 'string') parsed.attendance = JSON.parse(parsed.attendance);
-                    if (typeof parsed.history === 'string') parsed.history = JSON.parse(parsed.history);
-                    
-                    if (!parsed.endDate && parsed.startDate) {
-                        const e = new Date(parsed.startDate);
-                        e.setDate(e.getDate() + (parsed.daysCount || 15) - 1);
-                        parsed.endDate = e.toISOString().substr(0, 10);
-                    }
-                    
-                    return { ...DEFAULT_PAYSLIP_STATE, ...parsed };
-                }
-            } catch (e) { console.error(e); }
-            return DEFAULT_PAYSLIP_STATE;
+                const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+                return stored ? JSON.parse(stored) : DEFAULT_STATE;
+            } catch (e) { return DEFAULT_STATE; }
         };
 
-        const saveLocalData = (data) => {
-            try {
-                const store = { 
-                    ...data, 
-                    attendance: JSON.stringify(data.attendance),
-                    history: JSON.stringify(data.history || [])
-                };
-                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(store));
-            } catch (e) { console.error(e); }
-        };
+        const saveLocalData = (data) => localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
 
-        let db = null;
-        let userId = null;
-        const PAYSLIP_COLLECTION = 'payslips'; 
-        const PAYSLIP_DOC_ID = 'staff_data_v3'; 
+        let db, userId;
+        const PAYSLIP_COLLECTION = 'payslips';
+        const PAYSLIP_DOC_ID = 'staff_data_v4_multi';
 
         const writeToFirestore = (data) => {
             if (!db || !userId) return;
-            const save = { 
-                ...data, 
-                attendance: JSON.stringify(data.attendance),
-                history: JSON.stringify(data.history || [])
-            };
             const docRef = window.doc(db, PAYSLIP_COLLECTION, PAYSLIP_DOC_ID);
-            window.setDoc(docRef, save, { merge: true })
+            window.setDoc(docRef, data, { merge: true })
                 .then(() => showMessageBox("Synced!"))
                 .catch(e => console.error(e));
         };
 
-        // --- REACT COMPONENT ---
+        // --- COMPONENT ---
         function App() {
-            const [state, setState] = useState(DEFAULT_PAYSLIP_STATE);
+            const [state, setState] = useState(DEFAULT_STATE);
             const [isSaving, setIsSaving] = useState(false);
             const [isCloudMode, setIsCloudMode] = useState(false);
             const [isDataReady, setIsDataReady] = useState(false);
-            const isInitialLoad = useRef(true); 
+            const isInitialLoad = useRef(true);
 
             // Firebase Init
             useEffect(() => {
@@ -161,228 +134,153 @@
                         const app = window.initializeApp(userFirebaseConfig);
                         const auth = window.getAuth(app);
                         db = window.getFirestore(app);
-                        window.onAuthStateChanged(auth, (user) => {
-                            if (user) {
-                                userId = user.uid;
-                                setIsCloudMode(true);
-                            } else {
-                                window.signInAnonymously(auth).catch(() => {
-                                    setIsCloudMode(false);
-                                    setIsDataReady(true);
-                                    setState(loadLocalData());
-                                });
-                            }
+                        window.onAuthStateChanged(auth, u => {
+                            if (u) { userId = u.uid; setIsCloudMode(true); }
+                            else window.signInAnonymously(auth).catch(() => fallbackToLocal());
                         });
-                    } catch (e) {
-                        setIsCloudMode(false);
-                        setIsDataReady(true);
-                        setState(loadLocalData());
-                    }
-                } else {
-                    setIsDataReady(true);
-                    setState(loadLocalData());
-                }
-            }, []); 
+                    } catch (e) { fallbackToLocal(); }
+                } else fallbackToLocal();
+            }, []);
 
-            // Firestore Listener
+            const fallbackToLocal = () => {
+                setIsCloudMode(false); setIsDataReady(true); setState(loadLocalData());
+            };
+
+            // Listener
             useEffect(() => {
-                if (!isCloudMode || !db || !userId) return;
-                const docRef = window.doc(db, PAYSLIP_COLLECTION, PAYSLIP_DOC_ID);
-                const unsub = window.onSnapshot(docRef, (snap) => {
+                if (!isCloudMode || !db) return;
+                const unsub = window.onSnapshot(window.doc(db, PAYSLIP_COLLECTION, PAYSLIP_DOC_ID), (snap) => {
                     if (snap.exists()) {
-                        let d = snap.data();
-                        if (typeof d.attendance === 'string') d.attendance = JSON.parse(d.attendance);
-                        if (typeof d.history === 'string') d.history = JSON.parse(d.history);
-                        
-                        if (!d.endDate && d.startDate) {
-                             const e = new Date(d.startDate);
-                             e.setDate(e.getDate() + (d.daysCount || 15) - 1);
-                             d.endDate = e.toISOString().substr(0, 10);
-                        }
-
-                        setState(prev => ({ ...DEFAULT_PAYSLIP_STATE, ...d }));
-                        if (!isDataReady) { showMessageBox("Cloud data loaded!"); setIsDataReady(true); }
-                    } else if (!isDataReady) {
-                        setIsDataReady(true);
-                    }
-                }, () => {
-                    setIsCloudMode(false);
-                    setIsDataReady(true);
-                    setState(loadLocalData());
+                        setState(snap.data());
+                        if (!isDataReady) { showMessageBox("Cloud Data Loaded!"); setIsDataReady(true); }
+                    } else if (!isDataReady) setIsDataReady(true);
                 });
                 return () => unsub();
             }, [isCloudMode, isDataReady]);
 
-            // Save Effect
+            // Save
             useEffect(() => {
-                if (!isDataReady) return;
-                if (isInitialLoad.current) { isInitialLoad.current = false; return; }
-                
+                if (!isDataReady || isInitialLoad.current) { isInitialLoad.current = false; return; }
                 setIsSaving(true);
                 const t = setTimeout(() => {
-                    if (isCloudMode) writeToFirestore(state);
-                    else saveLocalData(state);
+                    isCloudMode ? writeToFirestore(state) : saveLocalData(state);
                     setIsSaving(false);
-                }, 500);
+                }, 800);
                 return () => clearTimeout(t);
             }, [state, isCloudMode, isDataReady]);
 
-            const updateState = (key, val) => setState(prev => ({ ...prev, [key]: val }));
-
-            // --- LOGIC ---
-            const handleDateRangeChange = (type, value) => {
-                let start = type === 'start' ? new Date(value) : new Date(state.startDate);
-                let end = type === 'end' ? new Date(value) : new Date(state.endDate);
-
-                if (end < start) {
-                    if (type === 'start') end = new Date(start);
-                    else start = new Date(end);
-                }
-
-                const diffTime = Math.abs(end - start);
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+            // --- ACTIONS ---
+            const updateGlobalDate = (type, val) => {
+                let start = type === 'start' ? new Date(val) : new Date(state.startDate);
+                let end = type === 'end' ? new Date(val) : new Date(state.endDate);
+                if (end < start) { type === 'start' ? end = new Date(start) : start = new Date(end); }
                 
-                const newAtt = Array(diffDays).fill(false).map((v, i) => 
-                    i < state.attendance.length ? state.attendance[i] : false
-                );
+                const diffDays = Math.ceil(Math.abs(end - start) / (86400000)) + 1;
+                
+                // Resize ALL staff attendance arrays
+                const newStaff = state.staff.map(s => ({
+                    ...s,
+                    attendance: Array(diffDays).fill(false).map((v, i) => i < s.attendance.length ? s.attendance[i] : false)
+                }));
 
-                setState(prev => ({ 
-                    ...prev, 
-                    startDate: start.toISOString().substr(0, 10),
-                    endDate: end.toISOString().substr(0, 10),
-                    daysCount: diffDays, 
-                    attendance: newAtt 
+                setState(p => ({ 
+                    ...p, 
+                    startDate: start.toISOString().substr(0,10), 
+                    endDate: end.toISOString().substr(0,10), 
+                    daysCount: diffDays,
+                    staff: newStaff
                 }));
             };
 
-            const toggleDay = (i) => {
-                const newAtt = [...state.attendance];
-                newAtt[i] = !newAtt[i];
-                updateState('attendance', newAtt);
+            const addStaff = () => {
+                const newId = Date.now();
+                setState(p => ({
+                    ...p,
+                    staff: [...p.staff, { id: newId, name: "New Staff", rate: 500, payMode: 'daily', attendance: Array(p.daysCount).fill(false) }]
+                }));
             };
 
-            // Helper to set all to present (True) without confirmation (Safe action)
-            const setAllPresent = () => {
-                 updateState('attendance', Array(state.daysCount).fill(true));
+            const removeStaff = (id) => {
+                if(confirm("Remove this staff member?")) {
+                    setState(p => ({ ...p, staff: p.staff.filter(s => s.id !== id) }));
+                }
             };
 
-            // NEW: SECURE RESET FUNCTION
+            const updateStaff = (id, field, val) => {
+                setState(p => ({
+                    ...p,
+                    staff: p.staff.map(s => s.id === id ? { ...s, [field]: val } : s)
+                }));
+            };
+
+            const toggleAttendance = (staffId, dayIndex) => {
+                setState(p => ({
+                    ...p,
+                    staff: p.staff.map(s => {
+                        if(s.id !== staffId) return s;
+                        const newAtt = [...s.attendance];
+                        newAtt[dayIndex] = !newAtt[dayIndex];
+                        return { ...s, attendance: newAtt };
+                    })
+                }));
+            };
+
+            // Bulk Actions
+            const markAllStaff = (isPresent) => {
+                if(confirm(`Are you sure you want to mark ALL staff as ${isPresent ? 'PRESENT' : 'ABSENT'}?`)) {
+                    setState(p => ({
+                        ...p,
+                        staff: p.staff.map(s => ({ ...s, attendance: Array(p.daysCount).fill(isPresent) }))
+                    }));
+                }
+            };
+
             const secureReset = () => {
-                const input = window.prompt("SECURITY CHECK:\n\nTo confirm clearing all entries to 'Absent', please type the word: RESET");
-                
-                if (input && input.toUpperCase() === 'RESET') {
-                    updateState('attendance', Array(state.daysCount).fill(false));
-                    showMessageBox("Attendance Reset Successful!");
-                } else {
-                     if (input !== null) showMessageBox("Reset cancelled. Incorrect word.", "error");
+                const input = prompt("Type RESET to clear ALL data for ALL staff:");
+                if(input === 'RESET') {
+                    setState(p => ({
+                        ...p,
+                        staff: p.staff.map(s => ({ ...s, attendance: Array(p.daysCount).fill(false) }))
+                    }));
+                    showMessageBox("All records cleared.");
                 }
             };
 
-            const daysPresent = state.attendance.filter(Boolean).length;
-            
-            const getCalculated = (mode, rate, days, totalDays) => {
-                let dRate = 0, total = 0;
-                if (mode === 'daily') {
-                    dRate = parseFloat(rate) || 0;
-                    total = dRate * days;
-                } else {
-                    const fixed = parseFloat(rate) || 0;
-                    dRate = totalDays > 0 ? fixed / totalDays : 0;
-                    total = dRate * days;
+            // Calculations
+            const calculatePay = (s) => {
+                const present = s.attendance.filter(Boolean).length;
+                let total = 0;
+                if(s.payMode === 'daily') total = (parseFloat(s.rate)||0) * present;
+                else {
+                    const fixed = parseFloat(s.rate)||0;
+                    const daily = state.daysCount > 0 ? fixed / state.daysCount : 0;
+                    total = daily * present;
                 }
-                return { dRate, total };
+                return { present, total };
             };
 
-            const { dRate: dailyRate, total: totalPayable } = getCalculated(state.payMode, state.rateInput, daysPresent, state.daysCount);
-
-            const getDisplayDate = (start, offset) => {
-                const d = new Date(start);
-                d.setDate(d.getDate() + offset);
-                return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' });
-            };
-
-            const formatFullDate = (dateStr) => {
-                 const d = new Date(dateStr);
-                 return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
-            };
-
-            // --- HISTORY LOGIC ---
-            const saveToHistory = () => {
-                if (!state.staffName) { showMessageBox("Enter Name first!", "error"); return; }
-                
-                const confirmSave = window.confirm(`Save record for ${state.staffName} and start a NEW period?`);
-                if (!confirmSave) return;
-
-                const record = {
-                    id: Date.now(),
-                    dateSaved: new Date().toLocaleDateString('en-PH'),
-                    staffName: state.staffName,
-                    startDate: state.startDate,
-                    endDate: state.endDate, 
-                    daysCount: state.daysCount,
-                    daysPresent: daysPresent,
-                    totalPayable: totalPayable,
-                    payMode: state.payMode,
-                    rateInput: state.rateInput,
-                    attendance: [...state.attendance] 
-                };
-
-                setState(prev => ({
-                    ...prev,
-                    history: [record, ...(prev.history || [])],
-                    attendance: Array(prev.daysCount).fill(false)
-                }));
-                
-                showMessageBox("Record Saved to History!");
-            };
-
-            const deleteHistoryItem = (id) => {
-                if(!window.confirm("Delete this history log?")) return;
-                const newHist = state.history.filter(h => h.id !== id);
-                updateState('history', newHist);
-            };
-
-            // --- PDF GENERATION ---
-            const generatePDF = (data = null) => {
-                const isHistory = !!data;
-                const source = data || state;
-                const currentDaysPresent = isHistory ? source.daysPresent : daysPresent;
-                const currentTotal = isHistory ? source.totalPayable : totalPayable;
-                const currentDailyRate = isHistory 
-                    ? getCalculated(source.payMode, source.rateInput, source.daysPresent, source.daysCount).dRate
-                    : dailyRate;
-
-                if (!source.staffName) { showMessageBox("Name Missing!", "error"); return; }
-
+            const generatePDF = (s) => {
+                if(!s.name) return alert("Enter name first");
                 const { jsPDF } = window.jspdf;
                 const doc = new jsPDF();
-                const primaryColor = [49, 46, 129]; 
+                const { present, total } = calculatePay(s);
+                const dailyRate = s.payMode === 'daily' ? s.rate : (s.rate / state.daysCount);
 
-                doc.setFillColor(...primaryColor);
-                doc.rect(0, 0, 210, 40, 'F');
-                doc.setTextColor(255, 255, 255);
-                doc.setFontSize(22);
-                doc.text("Payslip Report", 105, 20, { align: "center" });
+                doc.setFillColor(67, 56, 202); // Indigo
+                doc.rect(0,0,210,40,'F');
+                doc.setTextColor(255); doc.setFontSize(22);
+                doc.text("Payslip Report", 105, 20, {align:'center'});
                 doc.setFontSize(12);
-                doc.text(isHistory ? "Past Record Log" : "Current Period Summary", 105, 30, { align: "center" });
+                doc.text(`Period: ${formatFullDate(state.startDate)} - ${formatFullDate(state.endDate)}`, 105, 30, {align:'center'});
 
-                doc.setTextColor(0, 0, 0);
-                doc.setFontSize(14);
-                doc.text(`Staff: ${source.staffName}`, 20, 60);
-                doc.setFontSize(11);
-                
-                const sDate = source.startDate;
-                const eDate = source.endDate || getDisplayDate(source.startDate, source.daysCount - 1);
-                
-                doc.text(`Period: ${formatFullDate(sDate)} to ${formatFullDate(eDate)}`, 20, 70);
-                doc.text(`Generated: ${new Date().toLocaleDateString()}`, 20, 78);
+                doc.setTextColor(0); doc.setFontSize(14);
+                doc.text(`Name: ${s.name}`, 20, 60);
+                doc.text(`Rate: ${currency}${s.rate} (${s.payMode})`, 20, 70);
 
-                doc.setDrawColor(0); doc.setLineWidth(0.1); doc.rect(120, 55, 70, 35);
-                doc.setFontSize(10); doc.text("Total Payout (PHP):", 125, 65);
+                doc.setDrawColor(0); doc.rect(120, 55, 70, 30);
+                doc.setFontSize(10); doc.text("Net Payable:", 125, 65);
                 doc.setFontSize(18); doc.setTextColor(22, 163, 74);
-                doc.text(`${currency} ${currentTotal.toFixed(2)}`, 125, 75);
-                doc.setFontSize(10); doc.setTextColor(100);
-                doc.text(`(${currentDaysPresent} / ${source.daysCount} days present)`, 125, 82);
+                doc.text(`${currency}${total.toFixed(2)}`, 125, 78);
 
                 let y = 100;
                 doc.setTextColor(0); doc.setFontSize(12); doc.setFont(undefined, 'bold');
@@ -392,155 +290,121 @@
                 doc.text("Date", 25, y); doc.text("Status", 100, y); doc.text("Value", 160, y);
                 y+=10; doc.setFont(undefined, 'normal');
 
-                source.attendance.forEach((p, i) => {
+                s.attendance.forEach((p, i) => {
                     if (y > 270) { doc.addPage(); y = 20; }
-                    doc.text(getDisplayDate(source.startDate, i), 25, y);
+                    doc.text(getDisplayDate(state.startDate, i), 25, y);
                     if (p) doc.setTextColor(22, 163, 74); else doc.setTextColor(150);
                     doc.text(p ? "Present" : "Absent", 100, y);
                     doc.setTextColor(0);
-                    doc.text(p ? `${currency} ${currentDailyRate.toFixed(2)}` : "-", 160, y);
+                    doc.text(p ? `${currency}${dailyRate.toFixed(2)}` : "-", 160, y);
                     y+=8;
                 });
 
-                doc.save(`${source.staffName}_${isHistory ? 'history' : 'current'}.pdf`);
+                doc.save(`${s.name}_payslip.pdf`);
             };
 
-            if (!isDataReady) return <div className="min-h-screen flex items-center justify-center text-indigo-600">Loading...</div>;
+            if (!isDataReady) return <div className="flex h-screen items-center justify-center text-indigo-600 font-bold">Loading Multi-Staff System...</div>;
 
             return (
-                <div className="min-h-screen p-4 md:p-8 font-sans text-gray-800 flex justify-center">
+                <div className="min-h-screen pb-20">
                     <div id="message-box" className="hidden"></div>
-                    {isSaving && <div className="fixed bottom-4 right-4 bg-indigo-500 text-white p-2 px-4 rounded-full text-xs z-50 shadow-lg">Syncing...</div>}
-
-                    <div className="w-full max-w-4xl bg-white rounded-2xl shadow-xl overflow-hidden">
-                        {/* Header */}
-                        <div className="bg-indigo-700 p-6 text-white flex flex-col md:flex-row justify-between items-center gap-4">
-                            <div>
-                                <h1 className="text-2xl font-bold flex items-center gap-2"><span className="text-3xl">🇵🇭</span> Payslip Generator</h1>
-                                <p className={`text-xs font-bold ${isCloudMode ? 'text-green-300' : 'text-yellow-300'}`}>
-                                    {isCloudMode ? 'Cloud Sync Active' : 'Local Mode'}
-                                </p>
-                            </div>
-                            <div className="text-center bg-indigo-600 px-6 py-3 rounded-xl border border-indigo-500">
-                                <p className="text-xs text-indigo-200 uppercase">Total Payout</p>
-                                <p className="text-3xl font-bold text-green-300">{currency} {totalPayable.toFixed(2)}</p>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 lg:grid-cols-12">
-                            {/* Sidebar */}
-                            <div className="lg:col-span-4 bg-slate-50 p-6 border-b lg:border-r border-slate-200 flex flex-col gap-6">
-                                <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Staff Name</label>
-                                    <input type="text" value={state.staffName} onChange={(e) => updateState('staffName', e.target.value)} 
-                                        placeholder="Name" className="w-full p-3 border rounded-lg outline-none focus:border-indigo-500" />
-                                </div>
-
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Settings</label>
-                                    <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-4">
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <button onClick={() => updateState('payMode', 'daily')} className={`py-2 text-xs font-bold rounded ${state.payMode==='daily'?'bg-indigo-500 text-white':'bg-slate-200'}`}>Daily Rate</button>
-                                            <button onClick={() => updateState('payMode', 'fixed')} className={`py-2 text-xs font-bold rounded ${state.payMode==='fixed'?'bg-indigo-500 text-white':'bg-slate-200'}`}>Fixed Total</button>
-                                        </div>
-                                        <div className="relative">
-                                            <span className="absolute left-3 top-2 text-slate-400 font-bold">{currency}</span>
-                                            <input type="number" value={state.rateInput} onChange={(e) => updateState('rateInput', parseFloat(e.target.value)||0)} 
-                                                className="w-full pl-8 p-2 border rounded outline-none" />
-                                        </div>
-                                        
-                                        <div className="grid grid-cols-2 gap-2">
-                                            <div>
-                                                <label className="text-[10px] text-slate-400 uppercase block">Start Date</label>
-                                                <input type="date" value={state.startDate} onChange={(e) => handleDateRangeChange('start', e.target.value)} className="w-full p-1 border rounded text-sm" />
-                                            </div>
-                                            <div>
-                                                <label className="text-[10px] text-slate-400 uppercase block">End Date</label>
-                                                <input type="date" value={state.endDate} onChange={(e) => handleDateRangeChange('end', e.target.value)} className="w-full p-1 border rounded text-sm" />
-                                            </div>
-                                        </div>
+                    
+                    {/* TOP BAR */}
+                    <div className="bg-indigo-700 text-white p-4 sticky top-0 z-20 shadow-lg">
+                        <div className="max-w-5xl mx-auto">
+                            <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
+                                <h1 className="text-xl font-bold flex items-center gap-2">
+                                    <span className="text-2xl">🇵🇭</span> Multi-Staff Payroll
+                                </h1>
+                                <div className="flex gap-2 bg-indigo-800 p-1 rounded-lg">
+                                    <input type="date" value={state.startDate} onChange={(e)=>updateGlobalDate('start', e.target.value)} className="text-black text-xs p-2 rounded" />
+                                    <span className="flex items-center text-xs">to</span>
+                                    <input type="date" value={state.endDate} onChange={(e)=>updateGlobalDate('end', e.target.value)} className="text-black text-xs p-2 rounded" />
+                                    <div className="flex items-center px-3 text-xs font-bold bg-indigo-600 rounded">
+                                        {state.daysCount} Days
                                     </div>
-                                </div>
-
-                                <div className="flex flex-col gap-2 mt-auto">
-                                    <button onClick={() => generatePDF(null)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow flex justify-center gap-2 text-sm">
-                                        Download Current PDF
-                                    </button>
-                                    {/* HISTORY BUTTON */}
-                                    <button onClick={saveToHistory} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow flex justify-center gap-2 text-sm">
-                                        Save & Start New
-                                    </button>
                                 </div>
                             </div>
 
-                            {/* Main Grid */}
-                            <div className="lg:col-span-8 p-6 bg-white">
-                                <div className="flex justify-between items-center mb-4">
-                                    <div>
-                                        <h3 className="font-bold text-lg text-slate-700">Attendance Log</h3>
-                                        <div className="text-xs text-slate-400">{state.daysCount} Days Period</div>
-                                    </div>
-                                    
-                                    {/* Quick Toggle Buttons */}
-                                    <div className="flex gap-2">
-                                        <button onClick={setAllPresent} className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-200 transition">
-                                            Mark All Present
-                                        </button>
-                                        <button onClick={secureReset} className="text-[10px] font-bold bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-200 transition">
-                                            Reset
-                                        </button>
-                                    </div>
-                                </div>
-                                
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto pr-2">
-                                    {state.attendance.map((p, i) => (
-                                        <button key={i} onClick={() => toggleDay(i)} 
-                                            className={`p-2 rounded-lg border text-left transition-all ${p ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50 opacity-60'}`}>
-                                            <div className="flex justify-between text-[10px] text-slate-400 font-bold mb-1">
-                                                <span>DAY {i+1}</span>
-                                                {p && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
-                                            </div>
-                                            <div className="text-xs font-bold text-slate-700">{getDisplayDate(state.startDate, i)}</div>
-                                            <div className={`text-[10px] mt-1 font-bold ${p ? 'text-emerald-600' : 'text-slate-400'}`}>
-                                                {p ? `+${currency}${dailyRate.toFixed(0)}` : 'Absent'}
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-
-                                {/* HISTORY SECTION */}
-                                {state.history && state.history.length > 0 && (
-                                    <div className="mt-8 pt-6 border-t border-slate-100">
-                                        <h3 className="font-bold text-slate-700 mb-3">Past Cut-off Logs</h3>
-                                        <div className="space-y-2 max-h-[200px] overflow-y-auto">
-                                            {state.history.map((h) => (
-                                                <div key={h.id} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100 text-sm">
-                                                    <div>
-                                                        <div className="font-bold text-slate-700">{h.staffName}</div>
-                                                        <div className="text-xs text-slate-500">{formatFullDate(h.startDate)} - {formatFullDate(h.endDate)}</div>
-                                                    </div>
-                                                    <div className="flex items-center gap-3">
-                                                        <span className="font-bold text-green-600">{currency}{h.totalPayable.toFixed(2)}</span>
-                                                        <button onClick={() => generatePDF(h)} className="text-xs bg-white border border-blue-200 text-blue-600 px-2 py-1 rounded hover:bg-blue-50">PDF</button>
-                                                        <button onClick={() => deleteHistoryItem(h.id)} className="text-xs text-red-400 hover:text-red-600">×</button>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-                                
-                                <div className="mt-6 text-center">
-                                    <button onClick={secureReset} className="text-xs text-slate-400 hover:text-red-500 underline">
-                                        Clear all entries
-                                    </button>
-                                </div>
+                            {/* BULK TOOLS */}
+                            <div className="flex gap-2 overflow-x-auto pb-1">
+                                <button onClick={addStaff} className="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded text-xs font-bold flex items-center gap-1 whitespace-nowrap">
+                                    + Add Staff
+                                </button>
+                                <div className="h-8 w-px bg-indigo-500 mx-2"></div>
+                                <button onClick={()=>markAllStaff(true)} className="bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-2 rounded text-xs whitespace-nowrap">Mark ALL Present</button>
+                                <button onClick={()=>markAllStaff(false)} className="bg-indigo-500 hover:bg-indigo-600 text-white px-3 py-2 rounded text-xs whitespace-nowrap">Mark ALL Absent</button>
+                                <button onClick={secureReset} className="bg-red-500 hover:bg-red-600 text-white px-3 py-2 rounded text-xs ml-auto whitespace-nowrap">Reset ALL Data</button>
                             </div>
                         </div>
                     </div>
+
+                    {/* MAIN CONTENT */}
+                    <div className="max-w-5xl mx-auto p-4 space-y-6">
+                        
+                        {state.staff.map((s) => {
+                            const { present, total } = calculatePay(s);
+                            return (
+                                <div key={s.id} className="bg-white rounded-xl shadow border border-slate-200 overflow-hidden">
+                                    {/* Staff Header */}
+                                    <div className="bg-slate-50 p-4 border-b border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                                        <div className="flex gap-3 w-full md:w-auto">
+                                            <input type="text" value={s.name} onChange={(e)=>updateStaff(s.id, 'name', e.target.value)} 
+                                                className="font-bold text-lg text-slate-800 bg-transparent border-b border-dashed border-slate-300 focus:border-indigo-500 outline-none w-full md:w-48" placeholder="Staff Name" />
+                                            <button onClick={()=>removeStaff(s.id)} className="text-red-300 hover:text-red-500">✕</button>
+                                        </div>
+                                        
+                                        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
+                                            <div className="flex bg-white border rounded overflow-hidden">
+                                                <button onClick={()=>updateStaff(s.id, 'payMode', 'daily')} className={`px-3 py-1 text-[10px] font-bold ${s.payMode==='daily'?'bg-indigo-500 text-white':'bg-slate-100'}`}>Daily</button>
+                                                <button onClick={()=>updateStaff(s.id, 'payMode', 'fixed')} className={`px-3 py-1 text-[10px] font-bold ${s.payMode==='fixed'?'bg-indigo-500 text-white':'bg-slate-100'}`}>Fixed</button>
+                                            </div>
+                                            <div className="relative w-24">
+                                                <span className="absolute left-2 top-1.5 text-slate-400 text-xs">₱</span>
+                                                <input type="number" value={s.rate} onChange={(e)=>updateStaff(s.id, 'rate', e.target.value)} 
+                                                    className="w-full pl-5 p-1 border rounded text-sm" />
+                                            </div>
+                                            <div className="bg-green-100 text-green-800 px-3 py-1 rounded text-sm font-bold">
+                                                Total: {currency}{total.toFixed(0)}
+                                            </div>
+                                            <button onClick={()=>generatePDF(s)} className="bg-blue-600 text-white px-3 py-1.5 rounded text-xs hover:bg-blue-700">
+                                                PDF
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Attendance Grid */}
+                                    <div className="p-4">
+                                        <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-15 gap-1">
+                                            {s.attendance.map((isPresent, idx) => (
+                                                <button key={idx} onClick={()=>toggleAttendance(s.id, idx)}
+                                                    className={`h-12 flex flex-col items-center justify-center rounded border text-[10px] transition-all
+                                                    ${isPresent ? 'bg-green-500 border-green-600 text-white' : 'bg-slate-100 border-slate-200 text-slate-400'}`}>
+                                                    <span className="opacity-70">{getDisplayDate(state.startDate, idx).split(',')[0]}</span>
+                                                    <span className="font-bold">{getDisplayDate(state.startDate, idx).split(' ')[1]}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                        <div className="mt-2 text-right text-xs text-slate-400">
+                                            {present} days present
+                                        </div>
+                                    </div>
+                                </div>
+                            )
+                        })}
+
+                        {state.staff.length === 0 && (
+                            <div className="text-center py-10 text-slate-400 bg-white rounded-xl border-dashed border-2">
+                                No staff members. Click "Add Staff" to begin.
+                            </div>
+                        )}
+                    </div>
+
+                    {isSaving && <div className="fixed bottom-4 right-4 bg-indigo-600 text-white px-4 py-2 rounded-full text-xs shadow-lg animate-pulse">Saving...</div>}
                 </div>
             );
         }
+
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
