@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payslip Generator sa Lagum (Date Range)</title>
+    <title>Payslip Generator sa Lagum (Default Absent)</title>
     
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -61,12 +61,12 @@
         };
 
         const FIREBASE_ENABLED = userFirebaseConfig.projectId && userFirebaseConfig.apiKey;
-        const LOCAL_STORAGE_KEY = 'payslip_generator_v2_history';
+        const LOCAL_STORAGE_KEY = 'payslip_generator_v3_absent_default';
         
         // Calculate initial dates
         const today = new Date();
         const initialEnd = new Date(today);
-        initialEnd.setDate(today.getDate() + 14); // Default 15 days total
+        initialEnd.setDate(today.getDate() + 14); 
 
         // --- CORE STATE ---
         const DEFAULT_PAYSLIP_STATE = {
@@ -74,9 +74,10 @@
             payMode: 'daily',
             rateInput: 500,
             startDate: today.toISOString().substr(0, 10), 
-            endDate: initialEnd.toISOString().substr(0, 10), // New: End Date
+            endDate: initialEnd.toISOString().substr(0, 10),
             daysCount: 15, 
-            attendance: Array(15).fill(true),
+            // CHANGED: Default to all false (Absent)
+            attendance: Array(15).fill(false),
             history: [] 
         };
 
@@ -105,7 +106,7 @@
                     if (typeof parsed.attendance === 'string') parsed.attendance = JSON.parse(parsed.attendance);
                     if (typeof parsed.history === 'string') parsed.history = JSON.parse(parsed.history);
                     
-                    // Migration for old data without endDate
+                    // Migration logic for old data
                     if (!parsed.endDate && parsed.startDate) {
                         const e = new Date(parsed.startDate);
                         e.setDate(e.getDate() + (parsed.daysCount || 15) - 1);
@@ -132,7 +133,7 @@
         let db = null;
         let userId = null;
         const PAYSLIP_COLLECTION = 'payslips'; 
-        const PAYSLIP_DOC_ID = 'staff_data_v2'; 
+        const PAYSLIP_DOC_ID = 'staff_data_v3'; // Changed ID to separate from previous version
 
         const writeToFirestore = (data) => {
             if (!db || !userId) return;
@@ -195,7 +196,6 @@
                         if (typeof d.attendance === 'string') d.attendance = JSON.parse(d.attendance);
                         if (typeof d.history === 'string') d.history = JSON.parse(d.history);
                         
-                        // Migration check for cloud data
                         if (!d.endDate && d.startDate) {
                              const e = new Date(d.startDate);
                              e.setDate(e.getDate() + (d.daysCount || 15) - 1);
@@ -236,19 +236,17 @@
                 let start = type === 'start' ? new Date(value) : new Date(state.startDate);
                 let end = type === 'end' ? new Date(value) : new Date(state.endDate);
 
-                // Prevent invalid range (End before Start)
                 if (end < start) {
-                    if (type === 'start') end = new Date(start); // If start pushed past end
-                    else start = new Date(end); // If end pulled before start
+                    if (type === 'start') end = new Date(start);
+                    else start = new Date(end);
                 }
 
-                // Calculate difference
                 const diffTime = Math.abs(end - start);
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
                 
-                // Resize attendance array, keeping existing data
-                const newAtt = Array(diffDays).fill(true).map((v, i) => 
-                    i < state.attendance.length ? state.attendance[i] : true
+                // CHANGED: Default new days to FALSE (Absent)
+                const newAtt = Array(diffDays).fill(false).map((v, i) => 
+                    i < state.attendance.length ? state.attendance[i] : false
                 );
 
                 setState(prev => ({ 
@@ -264,6 +262,11 @@
                 const newAtt = [...state.attendance];
                 newAtt[i] = !newAtt[i];
                 updateState('attendance', newAtt);
+            };
+
+            // NEW: Bulk update helper
+            const setAllAttendance = (status) => {
+                 updateState('attendance', Array(state.daysCount).fill(status));
             };
 
             const daysPresent = state.attendance.filter(Boolean).length;
@@ -306,7 +309,7 @@
                     dateSaved: new Date().toLocaleDateString('en-PH'),
                     staffName: state.staffName,
                     startDate: state.startDate,
-                    endDate: state.endDate, // Use exact end date
+                    endDate: state.endDate, 
                     daysCount: state.daysCount,
                     daysPresent: daysPresent,
                     totalPayable: totalPayable,
@@ -315,11 +318,11 @@
                     attendance: [...state.attendance] 
                 };
 
-                // Add to history, reset attendance
+                // CHANGED: Reset attendance to FALSE (Absent) for new period
                 setState(prev => ({
                     ...prev,
                     history: [record, ...(prev.history || [])],
-                    attendance: Array(prev.daysCount).fill(true)
+                    attendance: Array(prev.daysCount).fill(false)
                 }));
                 
                 showMessageBox("Record Saved to History!");
@@ -360,7 +363,6 @@
                 doc.text(`Staff: ${source.staffName}`, 20, 60);
                 doc.setFontSize(11);
                 
-                // Use stored dates or current calculations
                 const sDate = source.startDate;
                 const eDate = source.endDate || getDisplayDate(source.startDate, source.daysCount - 1);
                 
@@ -439,7 +441,6 @@
                                                 className="w-full pl-8 p-2 border rounded outline-none" />
                                         </div>
                                         
-                                        {/* NEW: DATE RANGE INPUTS */}
                                         <div className="grid grid-cols-2 gap-2">
                                             <div>
                                                 <label className="text-[10px] text-slate-400 uppercase block">Start Date</label>
@@ -467,8 +468,20 @@
                             {/* Main Grid */}
                             <div className="lg:col-span-8 p-6 bg-white">
                                 <div className="flex justify-between items-center mb-4">
-                                    <h3 className="font-bold text-lg text-slate-700">Attendance Log ({state.daysCount} Days)</h3>
-                                    <span className="text-sm text-slate-500">{daysPresent} Present</span>
+                                    <div>
+                                        <h3 className="font-bold text-lg text-slate-700">Attendance Log</h3>
+                                        <div className="text-xs text-slate-400">{state.daysCount} Days Period</div>
+                                    </div>
+                                    
+                                    {/* NEW: Quick Toggle Buttons */}
+                                    <div className="flex gap-2">
+                                        <button onClick={() => setAllAttendance(true)} className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-200 transition">
+                                            Mark All Present
+                                        </button>
+                                        <button onClick={() => setAllAttendance(false)} className="text-[10px] font-bold bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg hover:bg-slate-200 transition">
+                                            Reset
+                                        </button>
+                                    </div>
                                 </div>
                                 
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto pr-2">
