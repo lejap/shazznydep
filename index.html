@@ -88,10 +88,15 @@
             setTimeout(() => box.classList.add('hidden'), 4000);
         };
 
-        const getDisplayDate = (startStr, offset) => {
+        // Helper to calculate specific date details
+        const getDateDetails = (startStr, offset) => {
             const d = new Date(startStr);
             d.setDate(d.getDate() + offset);
-            return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' });
+            return {
+                dayName: d.toLocaleDateString('en-US', { weekday: 'short' }), // Mon, Tue
+                monthDay: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), // Nov 19
+                fullDate: d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' })
+            };
         };
 
         // Helper to check if a specific day index is Sat (6) or Sun (0)
@@ -116,7 +121,7 @@
 
         let db, userId;
         const PAYSLIP_COLLECTION = 'payslips';
-        const PAYSLIP_DOC_ID = 'staff_data_v4_multi'; // Keeping same ID to preserve your data
+        const PAYSLIP_DOC_ID = 'staff_data_v4_multi'; 
 
         const writeToFirestore = (data) => {
             if (!db || !userId) return;
@@ -184,8 +189,6 @@
                 
                 const diffDays = Math.ceil(Math.abs(end - start) / (86400000)) + 1;
                 
-                // Resize ALL staff attendance arrays
-                // When resizing, new days default to false (Absent), weekends will be handled by render logic
                 const newStaff = state.staff.map(s => ({
                     ...s,
                     attendance: Array(diffDays).fill(false).map((v, i) => i < s.attendance.length ? s.attendance[i] : false)
@@ -224,7 +227,6 @@
             };
 
             const toggleAttendance = (staffId, dayIndex) => {
-                // Prevent toggling if it is a weekend
                 if (isWeekend(state.startDate, dayIndex)) return;
 
                 setState(p => ({
@@ -238,7 +240,6 @@
                 }));
             };
 
-            // Bulk Actions
             const markAllStaff = (isPresent) => {
                 if(confirm(`Are you sure you want to mark ALL staff as ${isPresent ? 'PRESENT' : 'ABSENT'} (excluding weekends)?`)) {
                     setState(p => ({
@@ -246,7 +247,6 @@
                         staff: p.staff.map(s => ({ 
                             ...s, 
                             attendance: s.attendance.map((val, i) => {
-                                // If it's a weekend, force it to be FALSE (Rest Day/Absent)
                                 if (isWeekend(p.startDate, i)) return false;
                                 return isPresent;
                             })
@@ -266,7 +266,6 @@
                 }
             };
 
-            // Calculations
             const calculatePay = (s) => {
                 const present = s.attendance.filter(Boolean).length;
                 let total = 0;
@@ -286,7 +285,7 @@
                 const { present, total } = calculatePay(s);
                 const dailyRate = s.payMode === 'daily' ? s.rate : (s.rate / state.daysCount);
 
-                doc.setFillColor(67, 56, 202); // Indigo
+                doc.setFillColor(67, 56, 202); 
                 doc.rect(0,0,210,40,'F');
                 doc.setTextColor(255); doc.setFontSize(22);
                 doc.text("Attendance and Payslip Generator", 105, 20, {align:'center'});
@@ -312,11 +311,13 @@
 
                 s.attendance.forEach((p, i) => {
                     if (y > 270) { doc.addPage(); y = 20; }
-                    doc.text(getDisplayDate(state.startDate, i), 25, y);
                     
-                    // Check for Rest Day in PDF
+                    // PDF Date Display
+                    const { fullDate } = getDateDetails(state.startDate, i);
+                    doc.text(fullDate, 25, y);
+                    
                     if (isWeekend(state.startDate, i)) {
-                        doc.setTextColor(249, 115, 22); // Orange
+                        doc.setTextColor(249, 115, 22); 
                         doc.text("Rest Day", 100, y);
                         doc.setTextColor(150);
                         doc.text("-", 160, y);
@@ -410,16 +411,19 @@
                                         <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 lg:grid-cols-15 gap-1">
                                             {s.attendance.map((isPresent, idx) => {
                                                 const isRestDay = isWeekend(state.startDate, idx);
+                                                const { dayName, monthDay } = getDateDetails(state.startDate, idx);
+
                                                 return (
                                                     <button key={idx} onClick={()=>toggleAttendance(s.id, idx)} disabled={isRestDay}
-                                                        className={`h-12 flex flex-col items-center justify-center rounded border text-[10px] transition-all
+                                                        className={`h-12 flex flex-col items-center justify-center rounded border transition-all
                                                         ${isRestDay 
                                                             ? 'bg-orange-50 border-orange-200 text-orange-400 cursor-not-allowed opacity-70' 
                                                             : (isPresent ? 'bg-green-500 border-green-600 text-white' : 'bg-slate-100 border-slate-200 text-slate-400')
                                                         }`}>
-                                                        <span className="opacity-70">{getDisplayDate(state.startDate, idx).split(',')[0]}</span>
-                                                        <span className="font-bold">
-                                                            {isRestDay ? "REST" : getDisplayDate(state.startDate, idx).split(' ')[1]}
+                                                        {/* Updated Date Display */}
+                                                        <span className="opacity-70 text-[9px] uppercase">{dayName}</span>
+                                                        <span className="font-bold text-xs">
+                                                            {isRestDay ? "REST" : monthDay}
                                                         </span>
                                                     </button>
                                                 )
