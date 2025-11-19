@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payslip Generator sa Lagum (Cloud Sync)</title>
+    <title>Payslip Generator sa Lagum (Date Range)</title>
     
     <!-- Load Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -20,13 +20,10 @@
     
     <!-- Load Firebase Modules (Auth and Firestore) -->
     <script type="module">
-        // Import necessary Firebase functions
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-        // Expose Firebase functions globally so the React/Babel script tag can access them
         window.initializeApp = initializeApp;
         window.getAuth = getAuth;
         window.signInAnonymously = signInAnonymously;
@@ -35,14 +32,11 @@
         window.doc = doc;
         window.setDoc = setDoc;
         window.onSnapshot = onSnapshot;
-        window.setLogLevel = setLogLevel;
     </script>
 
     <style>
-        /* Base styles */
         body { font-family: 'Inter', sans-serif; }
-        /* Prevents strange touch delay on buttons for mobile */
-        button { touch-action: manipulation; } 
+        button { touch-action: manipulation; }
     </style>
 </head>
 <body class="bg-slate-50">
@@ -54,8 +48,8 @@
         const currency = '₱'; 
         
         // =========================================================
-        // !!! CRITICAL: FIREBASE CONFIGURATION (PASTED BY USER) !!!
-        // This is used to connect to your personal Firestore database.
+        // YOUR FIREBASE CONFIGURATION
+        // =========================================================
         const userFirebaseConfig = {
              apiKey: "AIzaSyBK94w1LslQlZpowcEytMWI20iUbXQYBv4",
              authDomain: "payslip-6e83f.firebaseapp.com",
@@ -65,22 +59,27 @@
              appId: "1:804926507342:web:f0c3b19786574d18ab761f",
              measurementId: "G-TJE0RCHW4P"
         };
-        // =========================================================
 
         const FIREBASE_ENABLED = userFirebaseConfig.projectId && userFirebaseConfig.apiKey;
-        const LOCAL_STORAGE_KEY = 'payslip_generator_data_cloud_fallback';
+        const LOCAL_STORAGE_KEY = 'payslip_generator_v2_history';
         
+        // Calculate initial dates
+        const today = new Date();
+        const initialEnd = new Date(today);
+        initialEnd.setDate(today.getDate() + 14); // Default 15 days total
+
         // --- CORE STATE ---
         const DEFAULT_PAYSLIP_STATE = {
             staffName: "",
             payMode: 'daily',
             rateInput: 500,
-            // Initializes to today's date formatted as YYYY-MM-DD
-            startDate: new Date().toISOString().substr(0, 10), 
-            attendance: Array(15).fill(true), // 15 days, all true (Present)
+            startDate: today.toISOString().substr(0, 10), 
+            endDate: initialEnd.toISOString().substr(0, 10), // New: End Date
+            daysCount: 15, 
+            attendance: Array(15).fill(true),
+            history: [] 
         };
 
-        // Custom Message Box Function for notifications
         const showMessageBox = (message, type = 'info') => {
             const messageContainer = document.getElementById('message-box');
             if (!messageContainer) return;
@@ -88,10 +87,8 @@
             messageContainer.textContent = message;
             messageContainer.classList.remove('hidden', 'opacity-0');
             messageContainer.classList.add('opacity-100');
-
             messageContainer.className = `fixed top-4 right-4 p-3 px-4 rounded-xl shadow-2xl text-sm z-50 transition-all duration-300 transform translate-y-0 opacity-100 
                                             ${type === 'error' ? 'bg-red-600' : 'bg-green-600'} text-white`;
-            
             setTimeout(() => {
                 messageContainer.classList.remove('opacity-100');
                 messageContainer.classList.add('opacity-0');
@@ -99,499 +96,426 @@
             }, 4000);
         };
 
-
-        // --- FIRESTORE / LOCAL STORAGE FUNCTIONS ---
-        
-        // Local Storage Fallback Functions
+        // --- DATA HANDLING ---
         const loadLocalData = () => {
             try {
                 const storedData = localStorage.getItem(LOCAL_STORAGE_KEY);
                 if (storedData) {
-                    const parsedData = JSON.parse(storedData);
-                    // Handle attendance string conversion if needed
-                    if (typeof parsedData.attendance === 'string') {
-                         parsedData.attendance = JSON.parse(parsedData.attendance);
+                    const parsed = JSON.parse(storedData);
+                    if (typeof parsed.attendance === 'string') parsed.attendance = JSON.parse(parsed.attendance);
+                    if (typeof parsed.history === 'string') parsed.history = JSON.parse(parsed.history);
+                    
+                    // Migration for old data without endDate
+                    if (!parsed.endDate && parsed.startDate) {
+                        const e = new Date(parsed.startDate);
+                        e.setDate(e.getDate() + (parsed.daysCount || 15) - 1);
+                        parsed.endDate = e.toISOString().substr(0, 10);
                     }
-                    return { ...DEFAULT_PAYSLIP_STATE, ...parsedData };
+                    
+                    return { ...DEFAULT_PAYSLIP_STATE, ...parsed };
                 }
-            } catch (error) {
-                console.error("Error loading local data:", error);
-            }
+            } catch (e) { console.error(e); }
             return DEFAULT_PAYSLIP_STATE;
         };
 
         const saveLocalData = (data) => {
             try {
-                const dataToStore = {
-                    ...data,
-                    // Store array as JSON string for Local Storage compatibility
-                    attendance: JSON.stringify(data.attendance) 
+                const store = { 
+                    ...data, 
+                    attendance: JSON.stringify(data.attendance),
+                    history: JSON.stringify(data.history || [])
                 };
-                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToStore));
-            } catch (error) {
-                console.error("Error saving local data:", error);
-            }
+                localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(store));
+            } catch (e) { console.error(e); }
         };
 
-        // Firebase State and References
         let db = null;
         let userId = null;
-        // Using a simple collection and document ID since this is a single-user app for now
         const PAYSLIP_COLLECTION = 'payslips'; 
-        const PAYSLIP_DOC_ID = 'staff_data'; 
+        const PAYSLIP_DOC_ID = 'staff_data_v2'; 
 
-        // Write data to Firestore
         const writeToFirestore = (data) => {
             if (!db || !userId) return;
-            
-            const dataToSave = {
-                ...data,
-                // Store array as JSON string for Firestore compatibility (best practice)
-                attendance: JSON.stringify(data.attendance), 
+            const save = { 
+                ...data, 
+                attendance: JSON.stringify(data.attendance),
+                history: JSON.stringify(data.history || [])
             };
-
             const docRef = window.doc(db, PAYSLIP_COLLECTION, PAYSLIP_DOC_ID);
-            // Use merge: true to avoid overwriting the entire document
-            window.setDoc(docRef, dataToSave, { merge: true })
-                .then(() => showMessageBox("Data synced to the Cloud!"))
-                .catch(error => console.error("Firestore Write Error:", error));
+            window.setDoc(docRef, save, { merge: true })
+                .then(() => showMessageBox("Synced!"))
+                .catch(e => console.error(e));
         };
 
         // --- REACT COMPONENT ---
         function App() {
-            const [payslipData, setPayslipData] = useState(DEFAULT_PAYSLIP_STATE);
+            const [state, setState] = useState(DEFAULT_PAYSLIP_STATE);
             const [isSaving, setIsSaving] = useState(false);
             const [isCloudMode, setIsCloudMode] = useState(false);
             const [isDataReady, setIsDataReady] = useState(false);
-            
             const isInitialLoad = useRef(true); 
 
-            // 1. Firebase Initialization and Auth
+            // Firebase Init
             useEffect(() => {
                 if (FIREBASE_ENABLED && window.getFirestore) {
                     try {
-                        // setLogLevel('Debug'); // Uncomment for debugging Firestore traffic
                         const app = window.initializeApp(userFirebaseConfig);
                         const auth = window.getAuth(app);
                         db = window.getFirestore(app);
-                        
-                        // Listen for auth state changes
                         window.onAuthStateChanged(auth, (user) => {
                             if (user) {
-                                userId = user.uid; // Store the unique anonymous ID
+                                userId = user.uid;
                                 setIsCloudMode(true);
-                                console.log("Cloud Mode: Signed in anonymously. UID:", userId);
                             } else {
-                                // Attempt anonymous sign-in if not signed in
-                                window.signInAnonymously(auth).catch(e => {
-                                    console.error("Anonymous Sign-in failed:", e);
-                                    setIsCloudMode(false); 
+                                window.signInAnonymously(auth).catch(() => {
+                                    setIsCloudMode(false);
                                     setIsDataReady(true);
-                                    setPayslipData(loadLocalData());
+                                    setState(loadLocalData());
                                 });
                             }
                         });
                     } catch (e) {
-                        console.error("Firebase Init Error:", e);
                         setIsCloudMode(false);
                         setIsDataReady(true);
-                        setPayslipData(loadLocalData());
+                        setState(loadLocalData());
                     }
                 } else {
-                    // Fallback to Local Storage immediately if config is missing
-                    setPayslipData(loadLocalData());
                     setIsDataReady(true);
-                    showMessageBox("Firebase Config Missing. Running in Local Mode.", 'error');
+                    setState(loadLocalData());
                 }
             }, []); 
 
-            // 2. Firestore Listener (Cloud Mode)
+            // Firestore Listener
             useEffect(() => {
-                // Only run this effect if we are in Cloud Mode and Firebase resources are ready
                 if (!isCloudMode || !db || !userId) return;
-
                 const docRef = window.doc(db, PAYSLIP_COLLECTION, PAYSLIP_DOC_ID);
-                
-                // Set up the real-time listener
-                const unsubscribe = window.onSnapshot(docRef, (docSnap) => {
-                    if (docSnap.exists()) {
-                        let data = docSnap.data();
+                const unsub = window.onSnapshot(docRef, (snap) => {
+                    if (snap.exists()) {
+                        let d = snap.data();
+                        if (typeof d.attendance === 'string') d.attendance = JSON.parse(d.attendance);
+                        if (typeof d.history === 'string') d.history = JSON.parse(d.history);
                         
-                        // Parse attendance back into an array from the stored JSON string
-                        if (data.attendance && typeof data.attendance === 'string') {
-                            try {
-                                data.attendance = JSON.parse(data.attendance);
-                            } catch (e) {
-                                console.error("Error parsing attendance:", e);
-                                data.attendance = DEFAULT_PAYSLIP_STATE.attendance;
-                            }
+                        // Migration check for cloud data
+                        if (!d.endDate && d.startDate) {
+                             const e = new Date(d.startDate);
+                             e.setDate(e.getDate() + (d.daysCount || 15) - 1);
+                             d.endDate = e.toISOString().substr(0, 10);
                         }
-                        
-                        // Merge loaded data with defaults
-                        setPayslipData(prev => ({ ...DEFAULT_PAYSLIP_STATE, ...data }));
-                        
-                        if (!isDataReady) {
-                             // Only show ready message after initial fetch
-                            showMessageBox("Cloud data loaded!");
-                            setIsDataReady(true);
-                        }
+
+                        setState(prev => ({ ...DEFAULT_PAYSLIP_STATE, ...d }));
+                        if (!isDataReady) { showMessageBox("Cloud data loaded!"); setIsDataReady(true); }
                     } else if (!isDataReady) {
-                        // Document doesn't exist, use default state for the first time
-                        setPayslipData(DEFAULT_PAYSLIP_STATE);
                         setIsDataReady(true);
-                        console.log("No existing cloud data. Using default state.");
                     }
-                }, error => {
-                    // Handle disconnection/permission errors
-                    console.error("Firestore Listener Error:", error);
-                    showMessageBox("Cloud connection error. Check rules. Switching to Local Mode.", 'error');
+                }, () => {
                     setIsCloudMode(false);
                     setIsDataReady(true);
-                    setPayslipData(loadLocalData()); // Load local data as fallback
+                    setState(loadLocalData());
                 });
+                return () => unsub();
+            }, [isCloudMode, isDataReady]);
 
-                return () => unsubscribe(); // Cleanup the listener when component unmounts
-            }, [isCloudMode, isDataReady]); // Dependencies trigger the listener setup
-
-            // 3. Debounced Saving Effect (Cloud or Local)
+            // Save Effect
             useEffect(() => {
-                if (!isDataReady) return; // Wait until data is loaded/initialized
+                if (!isDataReady) return;
+                if (isInitialLoad.current) { isInitialLoad.current = false; return; }
+                
+                setIsSaving(true);
+                const t = setTimeout(() => {
+                    if (isCloudMode) writeToFirestore(state);
+                    else saveLocalData(state);
+                    setIsSaving(false);
+                }, 500);
+                return () => clearTimeout(t);
+            }, [state, isCloudMode, isDataReady]);
 
-                // Skip the initial render to prevent overwriting cloud data immediately
-                if (isInitialLoad.current) {
-                    isInitialLoad.current = false;
-                    return;
+            const updateState = (key, val) => setState(prev => ({ ...prev, [key]: val }));
+
+            // --- LOGIC ---
+            const handleDateRangeChange = (type, value) => {
+                let start = type === 'start' ? new Date(value) : new Date(state.startDate);
+                let end = type === 'end' ? new Date(value) : new Date(state.endDate);
+
+                // Prevent invalid range (End before Start)
+                if (end < start) {
+                    if (type === 'start') end = new Date(start); // If start pushed past end
+                    else start = new Date(end); // If end pulled before start
                 }
 
-                setIsSaving(true);
-                // Debounce the saving to avoid excessive writes/storage calls
-                const timeoutId = setTimeout(() => {
-                    if (isCloudMode) {
-                        writeToFirestore(payslipData);
-                    } else {
-                        saveLocalData(payslipData);
-                        showMessageBox("Data saved locally!");
-                    }
-                    setIsSaving(false);
-                }, 500); 
+                // Calculate difference
+                const diffTime = Math.abs(end - start);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+                
+                // Resize attendance array, keeping existing data
+                const newAtt = Array(diffDays).fill(true).map((v, i) => 
+                    i < state.attendance.length ? state.attendance[i] : true
+                );
 
-                return () => clearTimeout(timeoutId); // Cleanup timeout
-            }, [payslipData, isCloudMode, isDataReady]); // Trigger save when data changes
-
-            // Helper to update state and trigger save
-            const updatePayslipData = (key, value) => {
-                setPayslipData(prev => ({
-                    ...prev,
-                    [key]: value
+                setState(prev => ({ 
+                    ...prev, 
+                    startDate: start.toISOString().substr(0, 10),
+                    endDate: end.toISOString().substr(0, 10),
+                    daysCount: diffDays, 
+                    attendance: newAtt 
                 }));
             };
 
-            // --- CALCULATIONS & HANDLERS ---
-            const { payMode, rateInput, startDate, attendance } = payslipData;
+            const toggleDay = (i) => {
+                const newAtt = [...state.attendance];
+                newAtt[i] = !newAtt[i];
+                updateState('attendance', newAtt);
+            };
+
+            const daysPresent = state.attendance.filter(Boolean).length;
             
-            const totalDays = 15;
-            const daysPresent = attendance.filter(Boolean).length;
-
-            const getCalculatedValues = () => {
-                let dailyRate = 0;
-                let totalPayable = 0;
-
-                if (payMode === 'daily') {
-                    dailyRate = parseFloat(rateInput) || 0;
-                    totalPayable = dailyRate * daysPresent;
+            const getCalculated = (mode, rate, days, totalDays) => {
+                let dRate = 0, total = 0;
+                if (mode === 'daily') {
+                    dRate = parseFloat(rate) || 0;
+                    total = dRate * days;
                 } else {
-                    const totalFixed = parseFloat(rateInput) || 0;
-                    dailyRate = totalDays > 0 ? totalFixed / totalDays : 0;
-                    totalPayable = dailyRate * daysPresent;
+                    const fixed = parseFloat(rate) || 0;
+                    dRate = totalDays > 0 ? fixed / totalDays : 0;
+                    total = dRate * days;
                 }
-
-                return { dailyRate, totalPayable };
+                return { dRate, total };
             };
 
-            const { dailyRate, totalPayable } = getCalculatedValues();
+            const { dRate: dailyRate, total: totalPayable } = getCalculated(state.payMode, state.rateInput, daysPresent, state.daysCount);
 
-            const getDisplayDate = (dayIndex) => {
-                const date = new Date(startDate);
-                date.setDate(date.getDate() + dayIndex);
-                // Use PH locale style
-                return date.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' }); 
+            const getDisplayDate = (start, offset) => {
+                const d = new Date(start);
+                d.setDate(d.getDate() + offset);
+                return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric', weekday: 'short' });
             };
 
-            const toggleDay = (index) => {
-                const newAttendance = [...attendance];
-                newAttendance[index] = !newAttendance[index];
-                updatePayslipData('attendance', newAttendance);
+            const formatFullDate = (dateStr) => {
+                 const d = new Date(dateStr);
+                 return d.toLocaleDateString('en-PH', { month: 'short', day: 'numeric' });
             };
 
-            const resetAttendance = () => {
-                // Using a simple confirm since custom modal would add complexity
-                const userConfirmed = window.confirm("Are you sure you want to reset all days to Present? This cannot be undone.");
-                if (userConfirmed) {
-                    updatePayslipData('attendance', Array(15).fill(true));
-                }
-            };
-            
-            if (!isDataReady) {
-                return (
-                    <div className="min-h-screen flex items-center justify-center">
-                        <div className="text-xl text-slate-500 flex items-center gap-3">
-                            <svg className="animate-spin h-5 w-5 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-                            Connecting to Firebase Cloud...
-                        </div>
-                    </div>
-                );
-            }
+            // --- HISTORY LOGIC ---
+            const saveToHistory = () => {
+                if (!state.staffName) { showMessageBox("Enter Name first!", "error"); return; }
+                
+                const confirmSave = window.confirm(`Save record for ${state.staffName} and start a NEW period?`);
+                if (!confirmSave) return;
 
-            // --- PDF GENERATION LOGIC ---
-            const generatePDF = () => {
-                if (!payslipData.staffName.trim()) {
-                    const nameInputContainer = document.getElementById('name-input-container');
-                    if (nameInputContainer) {
-                         nameInputContainer.classList.add('ring-2', 'ring-red-500');
-                        setTimeout(() => {
-                            nameInputContainer.classList.remove('ring-2', 'ring-red-500');
-                        }, 3000);
-                    }
-                    showMessageBox("Error: Please enter the Staff Name before generating the Payslip.", 'error');
-                    return;
-                }
+                const record = {
+                    id: Date.now(),
+                    dateSaved: new Date().toLocaleDateString('en-PH'),
+                    staffName: state.staffName,
+                    startDate: state.startDate,
+                    endDate: state.endDate, // Use exact end date
+                    daysCount: state.daysCount,
+                    daysPresent: daysPresent,
+                    totalPayable: totalPayable,
+                    payMode: state.payMode,
+                    rateInput: state.rateInput,
+                    attendance: [...state.attendance] 
+                };
+
+                // Add to history, reset attendance
+                setState(prev => ({
+                    ...prev,
+                    history: [record, ...(prev.history || [])],
+                    attendance: Array(prev.daysCount).fill(true)
+                }));
+                
+                showMessageBox("Record Saved to History!");
+            };
+
+            const deleteHistoryItem = (id) => {
+                if(!window.confirm("Delete this history log?")) return;
+                const newHist = state.history.filter(h => h.id !== id);
+                updateState('history', newHist);
+            };
+
+            // --- PDF GENERATION ---
+            const generatePDF = (data = null) => {
+                const isHistory = !!data;
+                const source = data || state;
+                const currentDaysPresent = isHistory ? source.daysPresent : daysPresent;
+                const currentTotal = isHistory ? source.totalPayable : totalPayable;
+                const currentDailyRate = isHistory 
+                    ? getCalculated(source.payMode, source.rateInput, source.daysPresent, source.daysCount).dRate
+                    : dailyRate;
+
+                if (!source.staffName) { showMessageBox("Name Missing!", "error"); return; }
 
                 const { jsPDF } = window.jspdf;
                 const doc = new jsPDF();
-                const primaryColor = [49, 46, 129]; // Indigo-700 equivalent 
+                const primaryColor = [49, 46, 129]; 
 
-                // Header
                 doc.setFillColor(...primaryColor);
                 doc.rect(0, 0, 210, 40, 'F');
                 doc.setTextColor(255, 255, 255);
                 doc.setFontSize(22);
                 doc.text("Payslip Report", 105, 20, { align: "center" });
                 doc.setFontSize(12);
-                doc.text("15-Day Payment Period Summary", 105, 30, { align: "center" });
+                doc.text(isHistory ? "Past Record Log" : "Current Period Summary", 105, 30, { align: "center" });
 
-                // Staff Details
                 doc.setTextColor(0, 0, 0);
                 doc.setFontSize(14);
-                doc.text(`Staff Name: ${payslipData.staffName}`, 20, 60);
+                doc.text(`Staff: ${source.staffName}`, 20, 60);
                 doc.setFontSize(11);
-                doc.text(`Start Date: ${getDisplayDate(0)}`, 20, 70);
-                doc.text(`End Date: ${getDisplayDate(14)}`, 20, 78);
-
-                // Financial Summary Box
-                doc.setDrawColor(0, 0, 0);
-                doc.setLineWidth(0.1);
-                doc.rect(120, 55, 70, 35);
                 
-                doc.setFontSize(10);
-                doc.text("Total Payable Amount (PHP):", 125, 65);
-                doc.setFontSize(18);
-                doc.setTextColor(22, 163, 74); // Green 600
-                doc.text(`${currency} ${totalPayable.toFixed(2)}`, 125, 75);
-                doc.setFontSize(10);
-                doc.setTextColor(100, 100, 100);
-                doc.text(`(Based on ${daysPresent} days present)`, 125, 82);
-
-                // Table Header
-                let yPos = 100;
-                doc.setTextColor(0,0,0);
-                doc.setFontSize(12);
-                doc.setFont(undefined, 'bold');
-                doc.text("Attendance Breakdown", 20, yPos);
+                // Use stored dates or current calculations
+                const sDate = source.startDate;
+                const eDate = source.endDate || getDisplayDate(source.startDate, source.daysCount - 1);
                 
-                yPos += 10;
-                doc.setFontSize(10);
-                doc.setFillColor(240, 240, 240);
-                doc.rect(20, yPos-5, 170, 8, 'F');
-                doc.text("Date", 25, yPos);
-                doc.text("Status", 100, yPos);
-                doc.text("Value", 160, yPos);
+                doc.text(`Period: ${formatFullDate(sDate)} to ${formatFullDate(eDate)}`, 20, 70);
+                doc.text(`Generated: ${new Date().toLocaleDateString()}`, 20, 78);
 
-                // Table Rows
-                yPos += 10;
-                doc.setFont(undefined, 'normal');
+                doc.setDrawColor(0); doc.setLineWidth(0.1); doc.rect(120, 55, 70, 35);
+                doc.setFontSize(10); doc.text("Total Payout (PHP):", 125, 65);
+                doc.setFontSize(18); doc.setTextColor(22, 163, 74);
+                doc.text(`${currency} ${currentTotal.toFixed(2)}`, 125, 75);
+                doc.setFontSize(10); doc.setTextColor(100);
+                doc.text(`(${currentDaysPresent} / ${source.daysCount} days present)`, 125, 82);
+
+                let y = 100;
+                doc.setTextColor(0); doc.setFontSize(12); doc.setFont(undefined, 'bold');
+                doc.text("Attendance Log", 20, y); y+=10;
                 
-                attendance.forEach((isPresent, index) => {
-                    const dateStr = getDisplayDate(index);
-                    const status = isPresent ? "Present" : "Absent";
-                    const val = isPresent ? `${currency} ${dailyRate.toFixed(2)}` : "-";
+                doc.setFontSize(10); doc.setFillColor(240); doc.rect(20, y-5, 170, 8, 'F');
+                doc.text("Date", 25, y); doc.text("Status", 100, y); doc.text("Value", 160, y);
+                y+=10; doc.setFont(undefined, 'normal');
 
-                    if (yPos > 270) { 
-                        doc.addPage();
-                        yPos = 20;
-                    }
-
-                    doc.text(dateStr, 25, yPos);
-                    
-                    if (isPresent) {
-                        doc.setTextColor(22, 163, 74); // Green 600
-                    } else {
-                        doc.setTextColor(156, 163, 175); // Slate 400 
-                    }
-                    doc.text(status, 100, yPos);
-                    
-                    doc.setTextColor(0, 0, 0);
-                    doc.text(val, 160, yPos);
-                    
-                    yPos += 8;
+                source.attendance.forEach((p, i) => {
+                    if (y > 270) { doc.addPage(); y = 20; }
+                    doc.text(getDisplayDate(source.startDate, i), 25, y);
+                    if (p) doc.setTextColor(22, 163, 74); else doc.setTextColor(150);
+                    doc.text(p ? "Present" : "Absent", 100, y);
+                    doc.setTextColor(0);
+                    doc.text(p ? `${currency} ${currentDailyRate.toFixed(2)}` : "-", 160, y);
+                    y+=8;
                 });
 
-                // Footer
-                doc.setFontSize(8);
-                doc.setTextColor(150, 150, 150);
-                doc.text(`Generated by Payslip Generator sa Lagum (${isCloudMode ? 'Cloud Mode' : 'Local Mode'})`, 105, 290, { align: "center" });
-
-                // Save
-                const safeName = payslipData.staffName.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'untitled_staff';
-                doc.save(`${safeName}_payslip.pdf`);
+                doc.save(`${source.staffName}_${isHistory ? 'history' : 'current'}.pdf`);
             };
+
+            if (!isDataReady) return <div className="min-h-screen flex items-center justify-center text-indigo-600">Loading...</div>;
 
             return (
                 <div className="min-h-screen p-4 md:p-8 font-sans text-gray-800 flex justify-center">
-                    
-                    {/* Floating Message Box */}
-                    <div id="message-box" className="hidden fixed top-4 right-4 p-3 rounded-lg shadow-xl text-sm z-50 transition-opacity">
-                        Data Synchronized!
-                    </div>
-                    {/* Saving Indicator */}
-                    {isSaving && (
-                        <div className={`fixed bottom-4 right-4 ${isCloudMode ? 'bg-indigo-500' : 'bg-yellow-500'} text-white p-2 px-4 rounded-full shadow-lg text-xs z-50`}>
-                            {isCloudMode ? 'Syncing to Cloud...' : 'Saving locally...'}
-                        </div>
-                    )}
-
+                    <div id="message-box" className="hidden"></div>
+                    {isSaving && <div className="fixed bottom-4 right-4 bg-indigo-500 text-white p-2 px-4 rounded-full text-xs z-50 shadow-lg">Syncing...</div>}
 
                     <div className="w-full max-w-4xl bg-white rounded-2xl shadow-xl overflow-hidden">
-                        
-                        {/* Top Header */}
+                        {/* Header */}
                         <div className="bg-indigo-700 p-6 text-white flex flex-col md:flex-row justify-between items-center gap-4">
                             <div>
-                                <h1 className="text-2xl font-bold flex items-center gap-2">
-                                    <span className="text-3xl">🇵🇭</span> Payslip Generator sa Lagum
-                                </h1>
-                                <p className={`text-sm font-bold ${isCloudMode ? 'text-green-300' : 'text-yellow-300'}`}>
-                                    {isCloudMode ? 'Cloud Mode (Data syncs across all devices)' : 'Local Mode (Data saves per device)'}
+                                <h1 className="text-2xl font-bold flex items-center gap-2"><span className="text-3xl">🇵🇭</span> Payslip Generator</h1>
+                                <p className={`text-xs font-bold ${isCloudMode ? 'text-green-300' : 'text-yellow-300'}`}>
+                                    {isCloudMode ? 'Cloud Sync Active' : 'Local Mode'}
                                 </p>
                             </div>
                             <div className="text-center bg-indigo-600 px-6 py-3 rounded-xl border border-indigo-500">
-                                <p className="text-xs text-indigo-200 uppercase tracking-wide">Current Payout</p>
+                                <p className="text-xs text-indigo-200 uppercase">Total Payout</p>
                                 <p className="text-3xl font-bold text-green-300">{currency} {totalPayable.toFixed(2)}</p>
                             </div>
                         </div>
 
                         <div className="grid grid-cols-1 lg:grid-cols-12">
-                            
-                            {/* LEFT SIDEBAR (Controls) */}
-                            <div className="lg:col-span-4 bg-slate-50 p-6 border-b lg:border-b-0 lg:border-r border-slate-200 flex flex-col gap-6">
-                                
-                                {/* Staff Name Input */}
-                                <div id="name-input-container" className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 transition-all duration-300">
+                            {/* Sidebar */}
+                            <div className="lg:col-span-4 bg-slate-50 p-6 border-b lg:border-r border-slate-200 flex flex-col gap-6">
+                                <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
                                     <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Staff Name</label>
-                                    <input 
-                                        type="text" 
-                                        value={payslipData.staffName}
-                                        onChange={(e) => updatePayslipData('staffName', e.target.value)}
-                                        placeholder="e.g. Juan Dela Cruz"
-                                        className="w-full p-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-slate-50"
-                                    />
+                                    <input type="text" value={state.staffName} onChange={(e) => updateState('staffName', e.target.value)} 
+                                        placeholder="Name" className="w-full p-3 border rounded-lg outline-none focus:border-indigo-500" />
                                 </div>
 
-                                {/* Settings */}
                                 <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Pay Settings</label>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Settings</label>
                                     <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-4">
                                         <div className="grid grid-cols-2 gap-2">
-                                            <button onClick={() => updatePayslipData('payMode', 'daily')} className={`py-2 text-sm font-medium rounded-lg transition-all ${payMode === 'daily' ? 'bg-indigo-500 text-indigo-50 shadow-md' : 'bg-slate-200 text-slate-600'}`}>Daily Rate</button>
-                                            <button onClick={() => updatePayslipData('payMode', 'fixed')} className={`py-2 text-sm font-medium rounded-lg transition-all ${payMode === 'fixed' ? 'bg-indigo-500 text-indigo-50 shadow-md' : 'bg-slate-200 text-slate-600'}`}>Fixed Total</button>
+                                            <button onClick={() => updateState('payMode', 'daily')} className={`py-2 text-xs font-bold rounded ${state.payMode==='daily'?'bg-indigo-500 text-white':'bg-slate-200'}`}>Daily Rate</button>
+                                            <button onClick={() => updateState('payMode', 'fixed')} className={`py-2 text-xs font-bold rounded ${state.payMode==='fixed'?'bg-indigo-500 text-white':'bg-slate-200'}`}>Fixed Total</button>
+                                        </div>
+                                        <div className="relative">
+                                            <span className="absolute left-3 top-2 text-slate-400 font-bold">{currency}</span>
+                                            <input type="number" value={state.rateInput} onChange={(e) => updateState('rateInput', parseFloat(e.target.value)||0)} 
+                                                className="w-full pl-8 p-2 border rounded outline-none" />
                                         </div>
                                         
-                                        <div className="relative">
-                                            <span className="absolute left-3 top-3 text-slate-400 font-bold">{currency}</span>
-                                            <input 
-                                                type="number" 
-                                                value={payslipData.rateInput}
-                                                onChange={(e) => updatePayslipData('rateInput', parseFloat(e.target.value) || 0)}
-                                                className="w-full pl-8 p-2 border rounded-lg outline-none focus:border-indigo-500"
-                                            />
-                                            <span className="absolute right-3 top-3 text-xs text-slate-400">
-                                                {payMode === 'daily' ? '/ day' : '/ 15 days'}
-                                            </span>
-                                        </div>
-
-                                        <div>
-                                            <label className="text-xs text-slate-400 block mb-1">Start Date</label>
-                                            <input 
-                                                type="date" 
-                                                value={startDate}
-                                                onChange={(e) => updatePayslipData('startDate', e.target.value)}
-                                                className="w-full p-2 border rounded-lg text-sm text-slate-600"
-                                            />
+                                        {/* NEW: DATE RANGE INPUTS */}
+                                        <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                                <label className="text-[10px] text-slate-400 uppercase block">Start Date</label>
+                                                <input type="date" value={state.startDate} onChange={(e) => handleDateRangeChange('start', e.target.value)} className="w-full p-1 border rounded text-sm" />
+                                            </div>
+                                            <div>
+                                                <label className="text-[10px] text-slate-400 uppercase block">End Date</label>
+                                                <input type="date" value={state.endDate} onChange={(e) => handleDateRangeChange('end', e.target.value)} className="w-full p-1 border rounded text-sm" />
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
 
-                                {/* Download Button */}
-                                <button 
-                                    onClick={generatePDF}
-                                    className="mt-auto w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 rounded-xl shadow-lg shadow-blue-200 flex items-center justify-center gap-2 transition-transform active:scale-95"
-                                >
-                                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
-                                    Download Payslip (PDF)
-                                </button>
-
-                            </div>
-
-                            {/* RIGHT CONTENT (Grid) */}
-                            <div className="lg:col-span-8 p-6 bg-white">
-                                <div className="flex justify-between items-center mb-6">
-                                    <h3 className="font-bold text-lg text-slate-700">Attendance Log</h3>
-                                    <div className="text-sm font-medium text-slate-500">
-                                        {daysPresent} / {totalDays} Days
-                                    </div>
-                                </div>
-
-                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                                    {attendance.map((isPresent, index) => (
-                                        <button
-                                            key={index}
-                                            onClick={() => toggleDay(index)}
-                                            className={`
-                                                relative p-3 rounded-xl border-2 text-left transition-all group
-                                                ${isPresent 
-                                                    ? 'border-emerald-400 bg-emerald-50/30' 
-                                                    : 'border-slate-100 bg-slate-50 opacity-60 hover:opacity-100'
-                                                }
-                                            `}
-                                        >
-                                            <div className="flex justify-between items-start mb-1">
-                                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Day {index + 1}</span>
-                                                {isPresent && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
-                                            </div>
-                                            <div className="font-semibold text-slate-700 text-sm">
-                                                {getDisplayDate(index)}
-                                            </div>
-                                            <div className={`text-xs mt-1 font-bold ${isPresent ? 'text-emerald-600' : 'text-slate-300'}`}>
-                                                {isPresent ? `+${currency}${dailyRate.toFixed(0)}` : 'Absent'}
-                                            </div>
-                                        </button>
-                                    ))}
-                                </div>
-                                
-                                <div className="mt-6 text-center">
-                                    <button onClick={resetAttendance} className="text-xs text-slate-400 hover:text-red-500 underline">
-                                        Clear all entries
+                                <div className="flex flex-col gap-2 mt-auto">
+                                    <button onClick={() => generatePDF(null)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl shadow flex justify-center gap-2 text-sm">
+                                        Download Current PDF
+                                    </button>
+                                    {/* HISTORY BUTTON */}
+                                    <button onClick={saveToHistory} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow flex justify-center gap-2 text-sm">
+                                        Save & Start New
                                     </button>
                                 </div>
                             </div>
 
+                            {/* Main Grid */}
+                            <div className="lg:col-span-8 p-6 bg-white">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h3 className="font-bold text-lg text-slate-700">Attendance Log ({state.daysCount} Days)</h3>
+                                    <span className="text-sm text-slate-500">{daysPresent} Present</span>
+                                </div>
+                                
+                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto pr-2">
+                                    {state.attendance.map((p, i) => (
+                                        <button key={i} onClick={() => toggleDay(i)} 
+                                            className={`p-2 rounded-lg border text-left transition-all ${p ? 'border-emerald-400 bg-emerald-50' : 'border-slate-200 bg-slate-50 opacity-60'}`}>
+                                            <div className="flex justify-between text-[10px] text-slate-400 font-bold mb-1">
+                                                <span>DAY {i+1}</span>
+                                                {p && <span className="w-2 h-2 rounded-full bg-emerald-500"></span>}
+                                            </div>
+                                            <div className="text-xs font-bold text-slate-700">{getDisplayDate(state.startDate, i)}</div>
+                                            <div className={`text-[10px] mt-1 font-bold ${p ? 'text-emerald-600' : 'text-slate-400'}`}>
+                                                {p ? `+${currency}${dailyRate.toFixed(0)}` : 'Absent'}
+                                            </div>
+                                        </button>
+                                    ))}
+                                </div>
+
+                                {/* HISTORY SECTION */}
+                                {state.history && state.history.length > 0 && (
+                                    <div className="mt-8 pt-6 border-t border-slate-100">
+                                        <h3 className="font-bold text-slate-700 mb-3">Past Cut-off Logs</h3>
+                                        <div className="space-y-2 max-h-[200px] overflow-y-auto">
+                                            {state.history.map((h) => (
+                                                <div key={h.id} className="flex justify-between items-center bg-slate-50 p-3 rounded-lg border border-slate-100 text-sm">
+                                                    <div>
+                                                        <div className="font-bold text-slate-700">{h.staffName}</div>
+                                                        <div className="text-xs text-slate-500">{formatFullDate(h.startDate)} - {formatFullDate(h.endDate)}</div>
+                                                    </div>
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="font-bold text-green-600">{currency}{h.totalPayable.toFixed(2)}</span>
+                                                        <button onClick={() => generatePDF(h)} className="text-xs bg-white border border-blue-200 text-blue-600 px-2 py-1 rounded hover:bg-blue-50">PDF</button>
+                                                        <button onClick={() => deleteHistoryItem(h.id)} className="text-xs text-red-400 hover:text-red-600">×</button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>
             );
         }
-
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
 </body>
 </html>
-
